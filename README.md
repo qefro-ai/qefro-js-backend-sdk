@@ -57,6 +57,19 @@ Set the same signing secret in Admin Console → **Business Tools → SDK Connec
 
 Docs: [Register SDK Business Tools](https://docs.qefro.com/docs/guides/register-sdk-business-tools)
 
+## Examples
+
+Runnable backends (ecommerce, CRM, order-status, WhatsApp, and more) live in [`examples/`](examples/README.md):
+
+```bash
+git clone https://github.com/qefro-ai/qefro-js-backend-sdk.git
+cd qefro-js-backend-sdk/examples/basic-sdk
+cp .env.example .env
+npm install
+npm start
+# optional: ./scripts/smoke.sh
+```
+
 ## Protocol
 
 | Message | Purpose |

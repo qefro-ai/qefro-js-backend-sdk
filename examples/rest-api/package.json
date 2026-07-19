@@ -1,0 +1,13 @@
+{
+  "name": "qefro-example-rest-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@qefro-ai/backend": "file:../..",
+    "dotenv": "^16.4.5"
+  }
+}
