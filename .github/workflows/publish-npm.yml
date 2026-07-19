@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: https://registry.npmjs.org
-          scope: '@qefro'
+          scope: '@qefro-ai'
           cache: npm
 
       - name: Install
@@ -38,7 +38,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish @qefro/backend
+      - name: Publish @qefro-ai/backend
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |

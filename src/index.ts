@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 type QefroRequestType = 'ping' | 'tools.list' | 'tool.invoke' | 'tool.resume';
-const SDK_NAME = '@qefro/backend';
-const SDK_VERSION = '1.0.1';
+const SDK_NAME = '@qefro-ai/backend';
+const SDK_VERSION = '1.0.0';
 
 export interface QefroConfig {
     signingSecret: string;

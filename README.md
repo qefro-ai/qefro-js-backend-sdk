@@ -1,4 +1,4 @@
-# @qefro/backend
+# @qefro-ai/backend
 
 Qefro backend framework for Business Tool handlers and customer authorization.
 
@@ -7,13 +7,13 @@ Organizations expose one signed webhook (typically `POST /qefro`). Qefro Runtime
 ## Install
 
 ```bash
-npm install @qefro/backend
+npm install @qefro-ai/backend
 ```
 
 ## Quick start
 
 ```ts
-import { Qefro } from '@qefro/backend';
+import { Qefro } from '@qefro-ai/backend';
 
 const app = new Qefro({
   signingSecret: process.env.QEFRO_SIGNING_SECRET!,
@@ -76,7 +76,7 @@ MIT
 
 CI publishes to npm via [.github/workflows/publish-npm.yml](.github/workflows/publish-npm.yml).
 
-1. Create an npm **granular access token** (Automation / Bypass 2FA) with write access to `@qefro`.
+1. Create an npm **granular access token** (Automation / Bypass 2FA) with write access to `@qefro-ai`.
 2. In GitHub → **Settings → Secrets and variables → Actions**, add secret `NPM_TOKEN`.
 3. Publish either:
    - **Actions → Publish npm → Run workflow**, or
