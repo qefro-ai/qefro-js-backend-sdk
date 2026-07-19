@@ -3,7 +3,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 type QefroRequestType = 'ping' | 'tools.list' | 'tool.invoke' | 'tool.resume';
 const SDK_NAME = '@qefro/backend';
-const SDK_VERSION = '1.0.0';
+const SDK_VERSION = '1.0.1';
 
 export interface QefroConfig {
     signingSecret: string;
