@@ -1,26 +1,55 @@
 {
-    "name": "@qefro/backend",
-    "version": "1.0.0",
-    "description": "Qefro backend framework for business tool handlers and customer authorization orchestration",
-    "main": "dist/index.js",
-    "module": "dist/index.mjs",
-    "types": "dist/index.d.ts",
-    "scripts": {
-        "build": "tsup src/index.ts --format cjs,esm --dts",
-        "dev": "tsup src/index.ts --format esm --watch"
-    },
-    "devDependencies": {
-        "@types/node": "^22.10.1",
-        "tsup": "^8.0.0",
-        "typescript": "^5.3.0"
-    },
-    "files": [
-        "dist"
-    ],
-    "keywords": [
-        "ai",
-        "chat",
-        "sdk",
-        "customer-support"
-    ]
+  "name": "@qefro/backend",
+  "version": "1.0.0",
+  "description": "Qefro backend framework for business tool handlers and customer authorization orchestration",
+  "license": "MIT",
+  "author": "Qefro",
+  "homepage": "https://docs.qefro.com/docs/guides/register-sdk-business-tools",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qefro-ai/qefro-js-backend-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/qefro-ai/qefro-js-backend-sdk/issues"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format esm --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "qefro",
+    "ai",
+    "chat",
+    "sdk",
+    "backend",
+    "business-tools",
+    "customer-support"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0"
+  }
 }
