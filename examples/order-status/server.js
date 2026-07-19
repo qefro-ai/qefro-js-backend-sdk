@@ -150,7 +150,7 @@ app.tool(
   {
     name: 'order_status_check',
     description:
-      'Look up the status of an order by order ID. Returns status, ETA, tracking, and line items.',
+      'Look up one order by order ID (e.g. ORD-1001). Use only when the customer already provided an order ID. For “my orders” / order list without an ID, use my_orders_list instead.',
     auth: 'none',
     input_schema: {
       type: 'object',
@@ -207,7 +207,7 @@ app.tool(
   {
     name: 'my_orders_list',
     description:
-      'List recent orders for the current customer. Requires email OTP (dev code in challenge message).',
+      'List the current customer’s recent orders. Use for “show my orders”, “my order list”, or “what did I order” when no order ID is given. Requires a one-time email OTP (dev code is included in the challenge message).',
     auth: 'required',
     authentication_methods: ['email_otp'],
     default_auth_method: 'email_otp',
