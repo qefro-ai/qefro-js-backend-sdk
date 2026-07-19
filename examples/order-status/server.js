@@ -82,6 +82,16 @@ function resolveCustomerId(identity = {}) {
   );
 }
 
+function maskEmail(email) {
+  const [local, domain] = String(email).split('@');
+  if (!domain) return '***@example.com';
+  const head = local.slice(0, 1) || '*';
+  return `${head}***@${domain}`;
+}
+
+/** Hardcoded OTP for pause/resume testing. Never use in production. */
+const DEV_OTP = process.env.DEV_OTP || '123456';
+
 const app = new Qefro({
   signingSecret,
   endpointPath: '/qefro',
@@ -97,15 +107,40 @@ app.customer({
     };
   },
   async authorize(ctx) {
-    // Dev mock: always succeed so Test Tool / chat can exercise order lookups quickly.
+    const customer = ctx.customer;
+    const email = String(customer?.email || 'customer@example.com');
+
+    // First invoke: pause with email OTP challenge (Qefro relays; this server verifies).
+    if (!ctx.response) {
+      ctx.logger?.info?.(
+        `[dev] OTP challenge for ${customer.id} — code ${DEV_OTP} (hardcoded for testing)`,
+      );
+      return {
+        kind: 'challenge',
+        challenge: {
+          type: 'email_otp',
+          message: `Enter the 6-digit OTP sent to your email (dev code: ${DEV_OTP}).`,
+          destination_hint: maskEmail(email),
+        },
+      };
+    }
+
+    // tool.resume: verify the customer's reply
+    if (String(ctx.response).trim() !== DEV_OTP) {
+      ctx.logger?.warn?.(
+        `[dev] OTP rejected for ${customer.id}: got "${String(ctx.response).trim()}"`,
+      );
+      return { kind: 'denied' };
+    }
+
     return {
       kind: 'success',
-      customer: ctx.customer,
+      customer,
       auth: {
         type: 'bearer_token',
-        access_token: `mock-${ctx.customer.id}`,
+        access_token: `mock-${customer.id}`,
         expires_in: 900,
-        customer_id: String(ctx.customer.id),
+        customer_id: String(customer.id),
       },
     };
   },
@@ -171,8 +206,11 @@ app.tool(
 app.tool(
   {
     name: 'my_orders_list',
-    description: 'List recent orders for the current customer (uses channel identity).',
+    description:
+      'List recent orders for the current customer. Requires email OTP (dev code in challenge message).',
     auth: 'required',
+    authentication_methods: ['email_otp'],
+    default_auth_method: 'email_otp',
     input_schema: {
       type: 'object',
       properties: {
@@ -226,9 +264,12 @@ for (const order of Object.values(ORDERS)) {
   console.log(`  ${order.id}  ${order.status.padEnd(12)}  ${order.customerId}`);
 }
 console.log('');
+console.log(`Dev OTP for my_orders_list pause/resume: ${DEV_OTP}`);
+console.log('');
 console.log('Admin Console setup:');
 console.log('  1. Business Tools → SDK Connections → Add Connection');
 console.log(`  2. Webhook URL = ${handle.url}`);
 console.log('  3. Paste the signing secret above (or set QEFRO_SIGNING_SECRET to match)');
 console.log('  4. Test Connection, then Sync Tools into a workspace');
+console.log('  5. Ask “show my orders”, then reply with the OTP when challenged');
 console.log('');
