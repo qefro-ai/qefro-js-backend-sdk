@@ -34,13 +34,13 @@ Then the SDK sends OTP (`DEV_OTP`, default `123456`) and lists orders after resu
 
 ### Customers
 
-| ID | Email | Phone |
+| ID | Email (aliases) | Phone |
 | --- | --- | --- |
-| cust-alice | alice@example.com | +15550001111 |
+| cust-alice | alice@example.com, **info@cyberfly.io** | +15550001111 |
 | cust-bob | bob@example.com | +15550002222 |
 | cust-carol | carol@example.com | +15550003333 |
 
-Portal/Admin: any login email that is not in the table is mapped to Alice’s orders in this **dev mock** only.
+Same directory lookup on Portal, Playground, and Widget — use `info@cyberfly.io` or `alice@example.com`, then OTP `123456`.
 
 ### Sample order IDs
 

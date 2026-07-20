@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Qefro · Widget identity forwarding demo</title>
+    <style>
+      :root {
+        --bg: #0f1419;
+        --panel: #1a222c;
+        --text: #e8eef4;
+        --muted: #8b9aab;
+        --accent: #2dd4bf;
+        --border: #2a3542;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(1200px 600px at 10% -10%, #1a3a3a 0%, transparent 55%),
+          radial-gradient(900px 500px at 100% 0%, #1e293b 0%, transparent 50%),
+          var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 2rem 1.25rem 6rem;
+      }
+      main { max-width: 720px; margin: 0 auto; }
+      h1 { font-size: 1.6rem; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 0.35rem; }
+      p.lead { color: var(--muted); margin: 0 0 1.5rem; line-height: 1.5; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1.1rem 1.2rem;
+        margin-bottom: 1rem;
+      }
+      label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+      input, select {
+        width: 100%;
+        background: #0d1218;
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 0.55rem 0.7rem;
+        font: inherit;
+        margin-bottom: 0.75rem;
+      }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+      @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 8px;
+        padding: 0.55rem 0.9rem;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        background: var(--accent);
+        color: #042f2e;
+        margin-right: 0.5rem;
+        margin-top: 0.25rem;
+      }
+      button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      code, pre {
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 0.78rem;
+      }
+      pre {
+        background: #0d1218;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.75rem;
+        overflow: auto;
+        white-space: pre-wrap;
+        color: #c5d4e3;
+      }
+      .status { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; }
+      .ok { color: #5eead4; }
+      .err { color: #fca5a5; }
+      .banner {
+        margin-top: 0.9rem;
+        padding: 0.75rem 0.9rem;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #0d1218;
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+      .banner.ok {
+        border-color: #14b8a6;
+        background: rgba(20, 184, 166, 0.12);
+        color: #99f6e4;
+      }
+      .banner.err {
+        border-color: #f87171;
+        background: rgba(248, 113, 113, 0.12);
+        color: #fecaca;
+      }
+      ul { color: var(--muted); line-height: 1.55; padding-left: 1.1rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Widget identity forwarding</h1>
+      <p class="lead">
+        Paste the <strong>Widget Token</strong> from Admin → Widget (publishable embed key),
+        <em>not</em> <code>localStorage.token</code> (that is your admin login JWT).
+        Then load the widget, call <code>identify()</code> with a demo customer token, and ask
+        “show my orders using my signed-in identity”.
+      </p>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>Widget token (Admin → Widget → “Your Widget Token”)</label>
+            <input id="token" placeholder="uuid or wgt_… from Admin → Widget" autocomplete="off" />
+          </div>
+          <div>
+            <label>API endpoint</label>
+            <input id="endpoint" value="https://api.qefro.com" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Widget script URL</label>
+            <input id="scriptUrl" value="https://cdn.qefro.com/widget.js" />
+          </div>
+          <div>
+            <label>Auth mode</label>
+            <select id="mode">
+              <option value="jwt">jwt → Authorization: Bearer</option>
+              <option value="session">session → X-Session-Id</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>User</label>
+            <select id="user">
+              <option value="alice">Alice (info@cyberfly.io / cust-alice)</option>
+              <option value="bob">Bob (bob@example.com / cust-bob)</option>
+            </select>
+          </div>
+          <div>
+            <label>Workspace ID (required for Business Tools)</label>
+            <input id="workspaceId" value="f9b01fe3-0cc0-465e-9e4e-228de42750fa" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Demo end-user token (auto — used only in identify)</label>
+            <input id="demoToken" readonly />
+          </div>
+          <div></div>
+        </div>
+        <button id="boot">Load widget + identify</button>
+        <button class="secondary" id="clear" disabled>clearIdentity()</button>
+        <div id="banner" class="banner">Not loaded — click “Load widget + identify”</div>
+        <p class="status" id="status"></p>
+      </div>
+
+      <div class="card">
+        <strong>Try in chat</strong>
+        <ul>
+          <li>“Who am I according to the identity API?”</li>
+          <li>“List my orders using my signed-in identity”</li>
+          <li>Without identify: those tools should refuse / ask you to sign in</li>
+        </ul>
+        <pre id="log">Ready.</pre>
+      </div>
+    </main>
+
+    <script>
+      const USERS = {
+        alice: {
+          id: 'cust-alice',
+          email: 'info@cyberfly.io',
+          name: 'Alice',
+          jwt: 'dev-jwt-alice',
+          session: 'dev-session-alice',
+        },
+        bob: {
+          id: 'cust-bob',
+          email: 'bob@example.com',
+          name: 'Bob',
+          jwt: 'dev-jwt-bob',
+          session: 'dev-session-bob',
+        },
+      };
+
+      const qs = new URLSearchParams(location.search);
+      if (qs.get('token')) document.getElementById('token').value = qs.get('token');
+      if (qs.get('endpoint')) document.getElementById('endpoint').value = qs.get('endpoint');
+      if (qs.get('script')) document.getElementById('scriptUrl').value = qs.get('script');
+      if (qs.get('workspaceId')) document.getElementById('workspaceId').value = qs.get('workspaceId');
+
+      let widget = null;
+
+      function syncDemoToken() {
+        const u = USERS[document.getElementById('user').value];
+        const mode = document.getElementById('mode').value;
+        document.getElementById('demoToken').value = mode === 'jwt' ? u.jwt : u.session;
+      }
+      document.getElementById('user').onchange = syncDemoToken;
+      document.getElementById('mode').onchange = syncDemoToken;
+      syncDemoToken();
+
+      function log(msg, cls) {
+        document.getElementById('log').textContent = msg;
+        const banner = document.getElementById('banner');
+        banner.textContent = String(msg).split('\n')[0];
+        banner.className = 'banner ' + (cls || '');
+        document.getElementById('status').textContent = '';
+      }
+
+      function normalizeEndpoint(raw) {
+        let e = String(raw || '').trim();
+        if (!e) e = 'https://api.qefro.com';
+        e = e.replace(/\/graphql\/?$/i, '').replace(/\/+$/, '');
+        return e || 'https://api.qefro.com';
+      }
+
+      function destroyWidgetDom() {
+        document.getElementById('ai-widget-container')?.remove();
+        document.getElementById('ai-widget-styles')?.remove();
+        document.querySelectorAll('script[data-qefro-widget]').forEach((s) => s.remove());
+        widget = null;
+      }
+
+      function loadWidgetLibrary(src) {
+        return new Promise((resolve, reject) => {
+          // Always reload with cache-bust so AIWidget is present
+          document.querySelectorAll('script[data-qefro-widget]').forEach((s) => s.remove());
+          const s = document.createElement('script');
+          const bust = src.includes('?') ? `&_=${Date.now()}` : `?_=${Date.now()}`;
+          s.src = src + bust;
+          s.async = true;
+          s.dataset.qefroWidget = '1';
+          s.onload = () => resolve();
+          s.onerror = () => reject(new Error('Failed to load ' + src));
+          document.head.appendChild(s);
+        });
+      }
+
+      document.getElementById('boot').onclick = async () => {
+        const token = document.getElementById('token').value.trim();
+        const apiEndpoint = normalizeEndpoint(
+          document.getElementById('endpoint').value,
+        );
+        document.getElementById('endpoint').value = apiEndpoint;
+        const scriptUrl =
+          document.getElementById('scriptUrl').value.trim() ||
+          'https://cdn.qefro.com/widget.js';
+        const mode = document.getElementById('mode').value;
+        const u = USERS[document.getElementById('user').value];
+        if (!token) {
+          log('Paste your widget token from Admin → Widget', 'err');
+          return;
+        }
+        try {
+          const looksLikeWidgetToken =
+            /^wgt_[0-9a-f-]{36}$/i.test(token) ||
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+              token,
+            );
+          if (!looksLikeWidgetToken) {
+            log(
+              'Wrong token. Paste Admin → Widget → “Your Widget Token”\n' +
+                '(uuid like e8658237-… or wgt_<uuid>).\n' +
+                'Do not paste localStorage.token (admin JWT) or dev-jwt-alice.',
+              'err',
+            );
+            return;
+          }
+
+          destroyWidgetDom();
+          await loadWidgetLibrary(scriptUrl);
+
+          const WidgetCtor = window.AIWidget && window.AIWidget.Widget;
+          if (typeof WidgetCtor !== 'function') {
+            log(
+              'window.AIWidget.Widget missing after loading CDN.\n' +
+                'AIWidget keys: ' +
+                Object.keys(window.AIWidget || {}).join(', '),
+              'err',
+            );
+            return;
+          }
+
+          const workspaceId =
+            document.getElementById('workspaceId').value.trim() ||
+            'f9b01fe3-0cc0-465e-9e4e-228de42750fa';
+          document.getElementById('workspaceId').value = workspaceId;
+
+          // CDN TTS does apiUrl.replace — endpoint must be a non-empty string.
+          // workspaceId is required: without it the API offers zero Business Tools.
+          const config = {
+            token,
+            endpoint: apiEndpoint,
+            workspaceId,
+            theme: 'dark',
+            position: 'bottom-right',
+            primaryColor: '#14b8a6',
+            welcomeMessage:
+              'Identity forwarding demo — ask “who am I?” or “show my orders using my signed-in identity”',
+          };
+          widget = new WidgetCtor(config);
+
+          if (!widget?.config?.endpoint) {
+            throw new Error(
+              'Widget built without config.endpoint (got ' +
+                JSON.stringify(widget?.config) +
+                ')',
+            );
+          }
+
+          const authToken = mode === 'jwt' ? u.jwt : u.session;
+          widget.identify({
+            id: u.id,
+            email: u.email,
+            name: u.name,
+            auth: { mode, token: authToken },
+          });
+          document.getElementById('clear').disabled = false;
+          log(
+            `Widget OK · workspace cyberfly docs · ${apiEndpoint}\nIdentified as ${u.name} (${u.email})\nmode=${mode} end-user token=${authToken}\nAsk: "who am I?" or "show my orders using my signed-in identity"`,
+            'ok',
+          );
+        } catch (e) {
+          console.error(e);
+          log(String(e && e.stack ? e.stack : e.message || e), 'err');
+        }
+      };
+
+      document.getElementById('clear').onclick = async () => {
+        if (!widget?.clearIdentity) return;
+        await widget.clearIdentity();
+        log('Identity cleared — identity-forward tools should fail until identify() again', 'ok');
+      };
+    </script>
+  </body>
+</html>

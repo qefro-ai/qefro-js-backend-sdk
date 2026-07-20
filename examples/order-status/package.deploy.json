@@ -1,0 +1,14 @@
+{
+  "name": "qefro-example-order-status",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "./scripts/smoke.sh"
+  },
+  "dependencies": {
+    "@qefro-ai/backend": "^1.0.1",
+    "dotenv": "^16.4.5"
+  }
+}

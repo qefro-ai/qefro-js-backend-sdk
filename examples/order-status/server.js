@@ -15,7 +15,7 @@ const LOOKUP_BY = (process.env.LOOKUP_BY || 'email').trim().toLowerCase() === 'p
   : 'email';
 
 /**
- * @typedef {{ id: string, name: string, email: string, phone: string }} Customer
+ * @typedef {{ id: string, name: string, email: string, emails?: string[], phone: string }} Customer
  */
 
 /** @type {Customer[]} */
@@ -23,7 +23,9 @@ const CUSTOMERS = [
   {
     id: 'cust-alice',
     name: 'Alice',
+    // Primary + aliases so Widget (typed email) matches Portal login email.
     email: 'alice@example.com',
+    emails: ['alice@example.com', 'info@cyberfly.io'],
     phone: '+15550001111',
   },
   {
@@ -40,6 +42,10 @@ const CUSTOMERS = [
   },
 ];
 
+function customerEmails(c) {
+  const list = [c.email, ...(c.emails || [])].map(normalizeEmail).filter(Boolean);
+  return [...new Set(list)];
+}
 /** @type {Record<string, {
  *   id: string
  *   customerId: string
@@ -141,17 +147,15 @@ function readIdentityField(identity = {}, key) {
  * Org customer directory lookup — Qefro only supplies resolved identity attributes.
  * @returns {Customer | null}
  */
-function findCustomer({ email, phone, channel }) {
+function findCustomer({ email, phone }) {
   const e = normalizeEmail(email);
   const p = normalizePhone(phone);
 
   if (LOOKUP_BY === 'email' && e) {
-    const hit = CUSTOMERS.find((c) => c.email === e);
-    if (hit) return hit;
-    // Dev convenience: any Portal/Admin login email maps to Alice's orders.
-    const ch = String(channel || '').toLowerCase();
-    if (ch === 'portal' || ch === 'api') {
-      return { ...CUSTOMERS[0], email: e, name: `Portal (${e})` };
+    const hit = CUSTOMERS.find((c) => customerEmails(c).includes(e));
+    if (hit) {
+      // Prefer the email the caller used (e.g. info@cyberfly.io on Widget).
+      return { ...hit, email: e };
     }
     return null;
   }
@@ -178,12 +182,18 @@ app.customer({
     const phone = normalizePhone(
       readIdentityField(identity, 'phone') || asString(parameters.phone),
     );
-    return findCustomer({ email, phone, channel: ctx.channel || identity.channel });
+    return findCustomer({ email, phone });
   },
   async authorize(ctx) {
     const customer = ctx.customer;
     if (!customer) {
-      return { kind: 'not_found' };
+      return {
+        kind: 'not_found',
+        message:
+          LOOKUP_BY === 'email'
+            ? `No account for that email. Try: ${CUSTOMERS.map((c) => customerEmails(c).join(' or ')).join(', ')}.`
+            : `No account for that phone. Try: ${CUSTOMERS.map((c) => c.phone).join(', ')}.`,
+      };
     }
 
     if (!ctx.response) {
@@ -358,7 +368,9 @@ console.log(`  Dev OTP: ${DEV_OTP}`);
 console.log('');
 console.log('Customers:');
 for (const c of CUSTOMERS) {
-  console.log(`  ${c.id.padEnd(12)}  ${c.email.padEnd(22)}  ${c.phone}`);
+  console.log(
+    `  ${c.id.padEnd(12)}  ${customerEmails(c).join(', ').padEnd(40)}  ${c.phone}`,
+  );
 }
 console.log('');
 console.log('Sample order IDs:');
@@ -367,7 +379,8 @@ for (const order of Object.values(ORDERS)) {
 }
 console.log('');
 console.log('Identity resolution (runtime, not this SDK):');
-console.log('  Portal + email lookup → uses admin login email automatically');
+console.log('  Portal + email lookup → uses admin login email if it exists in directory');
 console.log('  WhatsApp + phone lookup → uses WhatsApp phone automatically');
 console.log('  Widget → asks user for missing email/phone, then invokes');
+console.log('  Directory emails: info@cyberfly.io | alice@example.com | bob@… | carol@…');
 console.log('');
