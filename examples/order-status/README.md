@@ -1,37 +1,55 @@
 # Order Status Example
 
-Local `@qefro-ai/backend` webhook for testing **SDK Connections**, Business Tool sync, and **OTP pause/resume**.
+Local `@qefro-ai/backend` webhook for **SDK Connections**, sync, and **OTP pause/resume**.
+
+## Identity model (generic resolver)
+
+This tool advertises what it needs — it does **not** hardcode WhatsApp / Widget / Portal rules:
+
+```js
+lookup: { required: ['email'] }  // or ['phone']; set LOOKUP_BY
+```
+
+Qefro runtime resolution order:
+
+1. Verified / channel identity  
+2. Stored conversation values  
+3. Tool arguments  
+4. Ask the user  
+
+| Channel | `LOOKUP_BY=email` | `LOOKUP_BY=phone` |
+| --- | --- | --- |
+| Portal / Admin | uses login email → invoke | asks for phone |
+| WhatsApp | asks for email | uses WhatsApp phone → invoke |
+| Widget | asks for email | asks for phone |
+
+Then the SDK sends OTP (`DEV_OTP`, default `123456`) and lists orders after resume.
 
 ## Tools
 
-| Tool | Auth | Purpose |
+| Tool | Auth | Lookup | Purpose |
+| --- | --- | --- | --- |
+| `order_status_check` | none | — | Look up by `order_id` |
+| `my_orders_list` | required | `email` or `phone` | List orders after OTP |
+
+### Customers
+
+| ID | Email | Phone |
 | --- | --- | --- |
-| `order_status_check` | none | Look up order by `order_id` |
-| `my_orders_list` | required (`email_otp`) | List orders after OTP challenge |
+| cust-alice | alice@example.com | +15550001111 |
+| cust-bob | bob@example.com | +15550002222 |
+| cust-carol | carol@example.com | +15550003333 |
+
+Portal/Admin: any login email that is not in the table is mapped to Alice’s orders in this **dev mock** only.
 
 ### Sample order IDs
 
 | Order ID | Status | Customer |
 | --- | --- | --- |
-| `ORD-1001` | processing | cust-alice |
-| `ORD-1002` | shipped | cust-alice |
-| `ORD-2001` | delivered | cust-bob |
-| `ORD-3001` | cancelled | cust-carol |
-
-## OTP pause / resume (dev)
-
-`my_orders_list` returns an `email_otp` challenge on first invoke. Qefro suspends the tool and asks the user for the code. The next reply is forwarded as `tool.resume`.
-
-| Env | Default | Purpose |
-| --- | --- | --- |
-| `DEV_OTP` | `123456` | Hardcoded OTP accepted by this mock (testing only) |
-
-Flow:
-
-1. Ask: “Show my orders”
-2. Assistant asks for the OTP (challenge message includes the dev code)
-3. Reply: `123456`
-4. Tool resumes and returns Alice’s / Bob’s orders
+| ORD-1001 | processing | cust-alice |
+| ORD-1002 | shipped | cust-alice |
+| ORD-2001 | delivered | cust-bob |
+| ORD-3001 | cancelled | cust-carol |
 
 ## Run
 
@@ -42,21 +60,13 @@ npm install
 npm start
 ```
 
-Default webhook: `http://127.0.0.1:8090/qefro`  
-Default secret: `dev-secret-order-status`
-
-### Smoke test
-
 ```bash
 ./scripts/smoke.sh
 ```
 
-Covers ping, tools.list, public order lookup, OTP challenge, successful resume, and denied wrong OTP.
+## Connect
 
-## Connect to Admin Console
-
-1. Expose the webhook if the API is not on localhost (e.g. `ngrok http 8090`).
-2. **Business Tools → SDK Connections → Add Connection** with the same signing secret.
-3. **Test Connection**, then **Sync Tools** into a workspace.
-4. Ask: “What’s the status of order ORD-1002?” (no OTP)
-5. Ask: “Show my orders”, then enter `123456` when challenged
+1. SDK Connections → webhook + signing secret  
+2. Sync Tools (stores `lookup_required` on the tool)  
+3. Playground: New Conversation → “show my orders” → OTP `123456`  
+4. Widget: may ask for email first, then OTP  

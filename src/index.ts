@@ -3,7 +3,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 type QefroRequestType = 'ping' | 'tools.list' | 'tool.invoke' | 'tool.resume';
 const SDK_NAME = '@qefro-ai/backend';
-const SDK_VERSION = '1.0.0';
+const SDK_VERSION = '1.0.1';
 
 export interface QefroConfig {
     signingSecret: string;
@@ -25,6 +25,14 @@ export interface QefroServerHandle {
 
 type ToolAuthMode = 'none' | 'optional' | 'required';
 
+/** Identity attributes the Qefro runtime must resolve before tool.invoke. */
+export interface ToolLookup {
+    /** Shorthand for a single required attribute, e.g. `"email"` or `"phone"`. */
+    by?: string;
+    /** Explicit list, e.g. `["email"]` or `["phone", "customer_id"]`. */
+    required?: string[];
+}
+
 export interface ToolDefinition {
     name: string;
     description?: string;
@@ -34,6 +42,12 @@ export interface ToolDefinition {
     permissions?: string[];
     timeout?: number;
     default_auth_method?: string;
+    /**
+     * What identity the runtime must have before invoking this tool.
+     * Runtime resolves from channel identity → conversation values → ask user.
+     * SDK never hardcodes WhatsApp/Widget/Portal rules.
+     */
+    lookup?: ToolLookup;
 }
 
 export interface RegisteredTool {
@@ -44,6 +58,7 @@ export interface RegisteredTool {
     auth?: ToolAuthMode;
     permissions?: string[];
     timeout?: number;
+    lookup?: ToolLookup;
 }
 
 interface ProtocolRequest {
@@ -194,6 +209,26 @@ class ChallengeSignal extends Error {
     }
 }
 
+/** Normalize `lookup.by` / `lookup.required` into a deduped attribute list. */
+export function normalizeLookup(lookup?: ToolLookup): string[] {
+    if (!lookup) return [];
+    const raw = [
+        ...(lookup.required ?? []),
+        ...(lookup.by ? [lookup.by] : []),
+    ];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of raw) {
+        const key = String(item || '')
+            .trim()
+            .toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(key);
+    }
+    return out;
+}
+
 export class Qefro {
     private readonly tools = new Map<string, ToolRegistration>();
     private readonly pending = new Map<string, PendingInvocation>();
@@ -325,11 +360,13 @@ export class Qefro {
     }
 
     private normalizeToolDefinition(definition: ToolDefinition): ToolDefinition {
+        const lookup = normalizeLookup(definition.lookup);
         return {
             ...definition,
             auth: definition.auth ?? 'optional',
             permissions: definition.permissions ?? [],
             authentication_methods: definition.authentication_methods ?? [],
+            lookup: lookup.length > 0 ? { required: lookup } : undefined,
         };
     }
 
@@ -342,6 +379,7 @@ export class Qefro {
             auth: tool.definition.auth,
             permissions: tool.definition.permissions,
             timeout: tool.definition.timeout,
+            lookup: tool.definition.lookup,
         }));
     }
 
@@ -351,7 +389,7 @@ export class Qefro {
         }
 
         if (req.type === 'ping') {
-            return { type: 'pong', protocol_version: this.protocolVersion, sdk_version: '0.1.0' };
+            return { type: 'pong', protocol_version: this.protocolVersion, sdk_version: SDK_VERSION };
         }
 
         if (req.type === 'tools.list') {
@@ -359,7 +397,7 @@ export class Qefro {
                 type: 'tools.list',
                 tools: this.listRegisteredTools(),
                 protocol_version: this.protocolVersion,
-                sdk_version: '0.1.0',
+                sdk_version: SDK_VERSION,
             };
         }
 

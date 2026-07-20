@@ -3,6 +3,42 @@ import { Qefro } from '@qefro-ai/backend';
 
 const port = Number(process.env.PORT || 8090);
 const signingSecret = process.env.QEFRO_SIGNING_SECRET || 'dev-secret-order-status';
+/** Hardcoded OTP for pause/resume testing. Never use in production. */
+const DEV_OTP = process.env.DEV_OTP || '123456';
+/**
+ * Identity attribute this tool requires the Qefro runtime to resolve.
+ * `email` — Portal/admin auto; Widget/WhatsApp ask when missing.
+ * `phone` — WhatsApp auto; Portal/Widget ask when missing.
+ */
+const LOOKUP_BY = (process.env.LOOKUP_BY || 'email').trim().toLowerCase() === 'phone'
+  ? 'phone'
+  : 'email';
+
+/**
+ * @typedef {{ id: string, name: string, email: string, phone: string }} Customer
+ */
+
+/** @type {Customer[]} */
+const CUSTOMERS = [
+  {
+    id: 'cust-alice',
+    name: 'Alice',
+    email: 'alice@example.com',
+    phone: '+15550001111',
+  },
+  {
+    id: 'cust-bob',
+    name: 'Bob',
+    email: 'bob@example.com',
+    phone: '+15550002222',
+  },
+  {
+    id: 'cust-carol',
+    name: 'Carol',
+    email: 'carol@example.com',
+    phone: '+15550003333',
+  },
+];
 
 /** @type {Record<string, {
  *   id: string
@@ -71,15 +107,17 @@ function asString(value, fallback = '') {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-function normalizeOrderId(raw) {
-  return asString(raw).toUpperCase().replace(/\s+/g, '');
+function normalizeEmail(raw) {
+  return asString(raw).toLowerCase();
 }
 
-function resolveCustomerId(identity = {}) {
-  return asString(
-    identity.customer_id,
-    asString(identity.user_id, asString(identity.phone, 'cust-alice')),
-  );
+function normalizePhone(raw) {
+  const s = asString(raw).replace(/[^\d+]/g, '');
+  return s;
+}
+
+function normalizeOrderId(raw) {
+  return asString(raw).toUpperCase().replace(/\s+/g, '');
 }
 
 function maskEmail(email) {
@@ -89,8 +127,41 @@ function maskEmail(email) {
   return `${head}***@${domain}`;
 }
 
-/** Hardcoded OTP for pause/resume testing. Never use in production. */
-const DEV_OTP = process.env.DEV_OTP || '123456';
+function maskPhone(phone) {
+  const p = String(phone);
+  if (p.length < 4) return '***';
+  return `${p.slice(0, 2)}***${p.slice(-2)}`;
+}
+
+function readIdentityField(identity = {}, key) {
+  return asString(identity[key], asString(identity[`${key}`]));
+}
+
+/**
+ * Org customer directory lookup — Qefro only supplies resolved identity attributes.
+ * @returns {Customer | null}
+ */
+function findCustomer({ email, phone, channel }) {
+  const e = normalizeEmail(email);
+  const p = normalizePhone(phone);
+
+  if (LOOKUP_BY === 'email' && e) {
+    const hit = CUSTOMERS.find((c) => c.email === e);
+    if (hit) return hit;
+    // Dev convenience: any Portal/Admin login email maps to Alice's orders.
+    const ch = String(channel || '').toLowerCase();
+    if (ch === 'portal' || ch === 'api') {
+      return { ...CUSTOMERS[0], email: e, name: `Portal (${e})` };
+    }
+    return null;
+  }
+
+  if (LOOKUP_BY === 'phone' && p) {
+    return CUSTOMERS.find((c) => normalizePhone(c.phone) === p) || null;
+  }
+
+  return null;
+}
 
 const app = new Qefro({
   signingSecret,
@@ -99,37 +170,47 @@ const app = new Qefro({
 
 app.customer({
   async lookup(ctx) {
-    const id = resolveCustomerId(ctx.identity);
-    return {
-      id,
-      name: id.startsWith('+') ? `Phone ${id}` : id,
-      email: `${id.replace(/[^a-z0-9]/gi, '')}@example.com`,
-    };
+    const identity = ctx.identity || {};
+    const parameters = ctx.parameters || {};
+    const email = normalizeEmail(
+      readIdentityField(identity, 'email') || asString(parameters.email),
+    );
+    const phone = normalizePhone(
+      readIdentityField(identity, 'phone') || asString(parameters.phone),
+    );
+    return findCustomer({ email, phone, channel: ctx.channel || identity.channel });
   },
   async authorize(ctx) {
     const customer = ctx.customer;
-    const email = String(customer?.email || 'customer@example.com');
+    if (!customer) {
+      return { kind: 'not_found' };
+    }
 
-    // First invoke: pause with email OTP challenge (Qefro relays; this server verifies).
     if (!ctx.response) {
       ctx.logger?.info?.(
-        `[dev] OTP challenge for ${customer.id} — code ${DEV_OTP} (hardcoded for testing)`,
+        `[dev] OTP for ${customer.id} via ${LOOKUP_BY} — code ${DEV_OTP}`,
       );
+      if (LOOKUP_BY === 'phone') {
+        return {
+          kind: 'challenge',
+          challenge: {
+            type: 'sms_otp',
+            message: `Enter the 6-digit OTP sent by SMS (dev code: ${DEV_OTP}).`,
+            destination_hint: maskPhone(customer.phone),
+          },
+        };
+      }
       return {
         kind: 'challenge',
         challenge: {
           type: 'email_otp',
           message: `Enter the 6-digit OTP sent to your email (dev code: ${DEV_OTP}).`,
-          destination_hint: maskEmail(email),
+          destination_hint: maskEmail(customer.email),
         },
       };
     }
 
-    // tool.resume: verify the customer's reply
     if (String(ctx.response).trim() !== DEV_OTP) {
-      ctx.logger?.warn?.(
-        `[dev] OTP rejected for ${customer.id}: got "${String(ctx.response).trim()}"`,
-      );
       return { kind: 'denied' };
     }
 
@@ -207,13 +288,25 @@ app.tool(
   {
     name: 'my_orders_list',
     description:
-      'List the current customer’s recent orders. Use for “show my orders”, “my order list”, or “what did I order” when no order ID is given. Requires a one-time email OTP (dev code is included in the challenge message).',
+      LOOKUP_BY === 'phone'
+        ? 'List the current customer’s recent orders. Runtime resolves phone from WhatsApp or asks for it, then sends SMS OTP.'
+        : 'List the current customer’s recent orders. Runtime resolves email from Portal/admin or asks for it on Widget, then sends email OTP.',
     auth: 'required',
-    authentication_methods: ['email_otp'],
-    default_auth_method: 'email_otp',
+    authentication_methods: [LOOKUP_BY === 'phone' ? 'sms_otp' : 'email_otp'],
+    default_auth_method: LOOKUP_BY === 'phone' ? 'sms_otp' : 'email_otp',
+    // Qefro runtime resolves these before invoke (channel identity → conversation → ask user).
+    lookup: { required: [LOOKUP_BY] },
     input_schema: {
       type: 'object',
       properties: {
+        email: {
+          type: 'string',
+          description: 'Account email when the channel did not already provide one',
+        },
+        phone: {
+          type: 'string',
+          description: 'Account phone (E.164) when the channel did not already provide one',
+        },
         limit: {
           type: 'integer',
           description: 'Max orders to return (default 5)',
@@ -242,12 +335,14 @@ app.tool(
 
     return {
       customer_id: customer.id,
+      email: customer.email,
+      phone: customer.phone,
       count: orders.length,
       orders,
       message:
         orders.length > 0
-          ? `Found ${orders.length} order(s) for ${customer.id}.`
-          : `No orders for ${customer.id}. Try identity customer_id cust-alice.`,
+          ? `Found ${orders.length} order(s) for ${customer.name}.`
+          : `No orders for ${customer.id}.`,
     };
   },
 );
@@ -258,18 +353,21 @@ console.log('');
 console.log('Mock order-status SDK listening');
 console.log(`  Webhook URL : ${handle.url}`);
 console.log(`  Signing secret: ${signingSecret}`);
+console.log(`  lookup.required: [${LOOKUP_BY}]  (set LOOKUP_BY=phone|email)`);
+console.log(`  Dev OTP: ${DEV_OTP}`);
 console.log('');
-console.log('Sample order IDs for order_status_check:');
+console.log('Customers:');
+for (const c of CUSTOMERS) {
+  console.log(`  ${c.id.padEnd(12)}  ${c.email.padEnd(22)}  ${c.phone}`);
+}
+console.log('');
+console.log('Sample order IDs:');
 for (const order of Object.values(ORDERS)) {
   console.log(`  ${order.id}  ${order.status.padEnd(12)}  ${order.customerId}`);
 }
 console.log('');
-console.log(`Dev OTP for my_orders_list pause/resume: ${DEV_OTP}`);
-console.log('');
-console.log('Admin Console setup:');
-console.log('  1. Business Tools → SDK Connections → Add Connection');
-console.log(`  2. Webhook URL = ${handle.url}`);
-console.log('  3. Paste the signing secret above (or set QEFRO_SIGNING_SECRET to match)');
-console.log('  4. Test Connection, then Sync Tools into a workspace');
-console.log('  5. Ask “show my orders”, then reply with the OTP when challenged');
+console.log('Identity resolution (runtime, not this SDK):');
+console.log('  Portal + email lookup → uses admin login email automatically');
+console.log('  WhatsApp + phone lookup → uses WhatsApp phone automatically');
+console.log('  Widget → asks user for missing email/phone, then invokes');
 console.log('');
