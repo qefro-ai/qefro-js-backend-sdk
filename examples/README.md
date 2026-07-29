@@ -47,6 +47,7 @@ Starts the server and sends signed `ping`, `tools.list`, and `tool.invoke` reque
 | `internal-portal` | KPI snapshot + approval workflow |
 | `auth-matrix` | Every auth mode × challenge type (`none`/`optional`/`required`, `email_otp`/`sms_otp`/`login`/`custom`) |
 | `flows` | Business Flow registration via `app.flow()` + `capabilities.list` discovery |
+| `order-approval` | Runtime flow execution: ask → condition → human approval → OTP-authenticated cancel |
 | `live-data` | Live upstream APIs (crypto, FX, weather) with hard timeouts |
 | `realtime-ops` | Time-derived state, mutable queue, mixed public/verified tools |
 
