@@ -2,7 +2,7 @@
 
 Qefro backend framework for Business Tool handlers and customer authorization.
 
-Organizations expose one signed webhook (typically `POST /qefro`). Qefro Runtime calls `ping`, `tools.list`, `tool.invoke`, and `tool.resume`. Authentication (OTP, sessions) stays in your handlers — Qefro only relays challenges.
+Organizations expose one signed webhook (typically `POST /qefro`). Qefro Runtime calls `ping`, `capabilities.list`, `tool.invoke`, and `tool.resume`. Authentication (OTP, sessions) stays in your handlers — Qefro only relays challenges.
 
 ## Install
 
@@ -57,6 +57,33 @@ Set the same signing secret in Admin Console → **Business Tools → SDK Connec
 
 Docs: [Register SDK Business Tools](https://docs.qefro.com/docs/guides/register-sdk-business-tools)
 
+## Business Flows
+
+Flows describe how your Business Tools are orchestrated. They are **metadata only** — the SDK advertises them through `capabilities.list` and the Qefro Runtime discovers, validates, versions, and (later) executes them. Nothing runs inside the SDK.
+
+```ts
+app
+  .flow({
+    id: 'order_lookup',            // immutable identity — renaming `name` never creates a new flow
+    name: 'Order Lookup',
+    description: 'Lookup customer orders',
+    version: 1,
+    category: 'crm',
+    tags: ['customer', 'orders'],
+    intent: ['track order', 'where is my order', 'find my shipment'],
+    inputs: ['email'],
+    outputs: ['customer', 'orders'],
+  })
+  .ask({ id: 'email', field: 'email', prompt: 'Please enter your email.' })
+  .tool({ id: 'lookup', tool_ref: 'lookup_customer' })
+  .tool({ id: 'orders', tool_ref: 'get_orders' })
+  .complete({ id: 'done', message: 'Here are your recent orders.' });
+```
+
+Every step needs a unique `id`; `tool` steps reference an existing Business Tool by `tool_ref`. Step builders: `.ask() .tool() .challenge() .upload() .condition() .delay() .approval() .complete()`. See [`examples/flows`](examples/flows).
+
+Docs: [Define Business Flows](https://docs.qefro.com/docs/guides/define-business-flows)
+
 ## Examples
 
 Runnable backends (ecommerce, CRM, order-status, WhatsApp, and more) live in [`examples/`](examples/README.md):
@@ -75,7 +102,8 @@ npm start
 | Message | Purpose |
 | --- | --- |
 | `ping` | Health / Test Connection |
-| `tools.list` | Discover handlers for Sync Tools |
+| `capabilities.list` | Discover tools **and** business flows for Sync Tools |
+| `tools.list` | Legacy tool-only discovery (still supported) |
 | `tool.invoke` | Run a handler |
 | `tool.resume` | Continue after a customer challenge reply |
 

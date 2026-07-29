@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
-type QefroRequestType = 'ping' | 'tools.list' | 'tool.invoke' | 'tool.resume';
+type QefroRequestType = 'ping' | 'tools.list' | 'capabilities.list' | 'tool.invoke' | 'tool.resume';
 const SDK_NAME = '@qefro-ai/backend';
-const SDK_VERSION = '1.0.1';
+const SDK_VERSION = '1.1.0';
 
 export interface QefroConfig {
     signingSecret: string;
@@ -79,9 +79,98 @@ interface ProtocolRequest {
 type ProtocolResponse =
     | { type: 'pong'; protocol_version?: string; sdk_version?: string }
     | { type: 'tools.list'; tools: RegisteredTool[]; protocol_version?: string; sdk_version?: string }
+    | {
+          type: 'capabilities.list';
+          tools: RegisteredTool[];
+          flows: BusinessFlow[];
+          protocol_version?: string;
+          sdk_version?: string;
+          sdk_name?: string;
+      }
     | { type: 'result'; output: unknown; authentication_context?: AuthenticationContextPayload }
     | { type: 'challenge'; resume_token: string; challenge: ChallengePayload }
     | { type: 'error'; code: string; message: string };
+
+/**
+ * Immutable identity + descriptive metadata for a Business Flow.
+ * `id` is the identity key — renaming `name` never creates a new flow.
+ */
+export interface BusinessFlowMetadata {
+    id: string;
+    name?: string;
+    description?: string;
+    /** Integer flow version, defaults to 1. Bump when the definition changes. */
+    version?: number;
+    category?: string;
+    tags?: string[];
+    /** Example utterances used by the runtime for AI flow selection. */
+    intent?: string[];
+    /** Identity/context attributes this flow requires before it can run. */
+    inputs?: string[];
+    /** Values this flow produces (for analytics and future flow chaining). */
+    outputs?: string[];
+}
+
+export type FlowStepType =
+    | 'ask'
+    | 'tool'
+    | 'challenge'
+    | 'upload'
+    | 'condition'
+    | 'delay'
+    | 'approval'
+    | 'complete';
+
+export interface AskStepConfig {
+    field: string;
+    prompt: string;
+}
+
+export interface ToolStepConfig {
+    /** Name of an existing Business Tool registered via app.tool(). */
+    tool_ref: string;
+}
+
+export interface ChallengeStepConfig {
+    message?: string;
+}
+
+export interface UploadStepConfig {
+    field?: string;
+    prompt?: string;
+    accept?: string[];
+}
+
+export interface ConditionStepConfig {
+    when: string;
+    then?: string;
+    else?: string;
+}
+
+export interface DelayStepConfig {
+    duration_seconds: number;
+}
+
+export interface ApprovalStepConfig {
+    prompt?: string;
+}
+
+export interface CompleteStepConfig {
+    message?: string;
+}
+
+/** Wire shape of a flow step: type-specific settings live inside `config`. */
+export interface FlowStep {
+    id: string;
+    type: FlowStepType;
+    config: Record<string, unknown>;
+}
+
+/** A Business Flow as advertised through `capabilities.list`. Never executed by the SDK. */
+export interface BusinessFlow {
+    metadata: BusinessFlowMetadata;
+    steps: FlowStep[];
+}
 
 export interface ChallengePayload {
     type: 'email_otp' | 'sms_otp' | 'login' | 'custom';
@@ -200,6 +289,71 @@ interface ToolRegistration {
     handler: (ctx: ToolContext) => Promise<unknown>;
 }
 
+interface FlowRegistration {
+    metadata: BusinessFlowMetadata;
+    steps: FlowStep[];
+}
+
+/**
+ * Fluent builder returned by app.flow(). Steps are recorded into the SDK's
+ * flow registry as they are declared; the SDK never executes them.
+ */
+export class FlowBuilder {
+    private readonly registration: FlowRegistration;
+
+    constructor(registration: FlowRegistration) {
+        this.registration = registration;
+    }
+
+    ask(step: { id: string } & AskStepConfig): this {
+        return this.push(step.id, 'ask', { field: step.field, prompt: step.prompt });
+    }
+
+    tool(step: { id: string } & ToolStepConfig): this {
+        return this.push(step.id, 'tool', { tool_ref: step.tool_ref });
+    }
+
+    challenge(step: { id: string } & ChallengeStepConfig): this {
+        return this.push(step.id, 'challenge', { message: step.message });
+    }
+
+    upload(step: { id: string } & UploadStepConfig): this {
+        return this.push(step.id, 'upload', { field: step.field, prompt: step.prompt, accept: step.accept });
+    }
+
+    condition(step: { id: string } & ConditionStepConfig): this {
+        return this.push(step.id, 'condition', { when: step.when, then: step.then, else: step.else });
+    }
+
+    delay(step: { id: string } & DelayStepConfig): this {
+        return this.push(step.id, 'delay', { duration_seconds: step.duration_seconds });
+    }
+
+    approval(step: { id: string } & ApprovalStepConfig): this {
+        return this.push(step.id, 'approval', { prompt: step.prompt });
+    }
+
+    complete(step: { id: string } & CompleteStepConfig): this {
+        return this.push(step.id, 'complete', { message: step.message });
+    }
+
+    private push(id: string, type: FlowStepType, config: Record<string, unknown>): this {
+        const stepId = typeof id === 'string' ? id.trim() : '';
+        if (!stepId) {
+            throw new Error(`Flow "${this.registration.metadata.id}": every step requires a non-empty id`);
+        }
+        if (this.registration.steps.some((s) => s.id === stepId)) {
+            throw new Error(`Flow "${this.registration.metadata.id}": duplicate step id "${stepId}"`);
+        }
+        const cleaned: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(config)) {
+            if (value !== undefined) cleaned[key] = value;
+        }
+        this.registration.steps.push({ id: stepId, type, config: cleaned });
+        return this;
+    }
+}
+
 class ChallengeSignal extends Error {
     challenge: ChallengePayload;
 
@@ -231,6 +385,7 @@ export function normalizeLookup(lookup?: ToolLookup): string[] {
 
 export class Qefro {
     private readonly tools = new Map<string, ToolRegistration>();
+    private readonly flows = new Map<string, FlowRegistration>();
     private readonly pending = new Map<string, PendingInvocation>();
     private readonly authByConversation = new Map<string, StoredAuth>();
     private readonly protocolVersion: string;
@@ -279,6 +434,26 @@ export class Qefro {
     ): void {
         const parsed = this.parseToolRegistration(arg1, arg2, arg3);
         this.tools.set(parsed.definition.name, parsed);
+    }
+
+    /**
+     * Register a Business Flow. Flows are metadata only: the SDK advertises them
+     * through `capabilities.list` and the Qefro Runtime orchestrates execution.
+     */
+    flow(metadata: BusinessFlowMetadata): FlowBuilder {
+        const id = typeof metadata.id === 'string' ? metadata.id.trim() : '';
+        if (!id) {
+            throw new Error('flow() requires a non-empty metadata.id');
+        }
+        if (this.flows.has(id)) {
+            throw new Error(`Flow "${id}" is already registered`);
+        }
+        const registration: FlowRegistration = {
+            metadata: { ...metadata, id, version: metadata.version ?? 1 },
+            steps: [],
+        };
+        this.flows.set(id, registration);
+        return new FlowBuilder(registration);
     }
 
     verifySignature(signature: string | undefined, timestamp: string | undefined, body: string): boolean {
@@ -370,6 +545,13 @@ export class Qefro {
         };
     }
 
+    private listRegisteredFlows(): BusinessFlow[] {
+        return [...this.flows.values()].map((flow) => ({
+            metadata: flow.metadata,
+            steps: flow.steps,
+        }));
+    }
+
     private listRegisteredTools(): RegisteredTool[] {
         return [...this.tools.values()].map((tool) => ({
             name: tool.definition.name,
@@ -398,6 +580,17 @@ export class Qefro {
                 tools: this.listRegisteredTools(),
                 protocol_version: this.protocolVersion,
                 sdk_version: SDK_VERSION,
+            };
+        }
+
+        if (req.type === 'capabilities.list') {
+            return {
+                type: 'capabilities.list',
+                tools: this.listRegisteredTools(),
+                flows: this.listRegisteredFlows(),
+                protocol_version: this.protocolVersion,
+                sdk_version: SDK_VERSION,
+                sdk_name: SDK_NAME,
             };
         }
 
