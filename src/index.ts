@@ -33,7 +33,17 @@ export interface ToolLookup {
     required?: string[];
 }
 
-export interface ToolDefinition {
+/**
+ * Business Tool definition. `TInput`/`TOutput` carry the tool's typed contract
+ * through app.tool() so handlers receive typed parameters and must return the
+ * declared output. Both default to the untyped JavaScript shapes, so existing
+ * code compiles unchanged.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export interface ToolDefinition<
+    TInput = Record<string, unknown>,
+    TOutput = unknown,
+> {
     name: string;
     description?: string;
     input_schema?: Record<string, unknown>;
@@ -250,13 +260,21 @@ export interface CustomerContext {
     [key: string]: unknown;
 }
 
+/** Typed tool handler: receives typed parameters, must return the declared output. */
+export type ToolHandler<TInput = Record<string, unknown>, TOutput = unknown> = (
+    ctx: ToolContext<TInput>,
+) => Promise<TOutput>;
+
+/** Runtime-facing handler shape stored in the registry (parameters arrive untyped). */
+type AnyToolHandler = (ctx: ToolContext) => Promise<unknown>;
+
 export type Middleware = (ctx: ToolContext, next: () => Promise<unknown>) => Promise<unknown>;
 export type BeforeHook = (ctx: ToolContext) => Promise<void> | void;
 export type AfterHook = (ctx: ToolContext, output: unknown) => Promise<unknown> | unknown;
 
-export interface ToolContext {
+export interface ToolContext<TParameters = Record<string, unknown>> {
     identity: Record<string, unknown>;
-    parameters: Record<string, unknown>;
+    parameters: TParameters;
     conversation: { id: string };
     channel?: string;
     authentication?: Record<string, unknown>;
@@ -286,7 +304,7 @@ export interface AuthBuilder<T> {
 
 interface ToolRegistration {
     definition: ToolDefinition;
-    handler: (ctx: ToolContext) => Promise<unknown>;
+    handler: AnyToolHandler;
 }
 
 interface FlowRegistration {
@@ -424,13 +442,24 @@ export class Qefro {
         return this;
     }
 
-    tool(name: string, handler: (ctx: ToolContext) => Promise<unknown>, metadata?: Omit<ToolDefinition, 'name'>): void;
-    tool(name: string, metadata: Omit<ToolDefinition, 'name'>, handler: (ctx: ToolContext) => Promise<unknown>): void;
-    tool(definition: ToolDefinition, handler: (ctx: ToolContext) => Promise<unknown>): void;
+    tool<TInput = Record<string, unknown>, TOutput = unknown>(
+        name: string,
+        handler: ToolHandler<TInput, TOutput>,
+        metadata?: Omit<ToolDefinition<TInput, TOutput>, 'name'>,
+    ): void;
+    tool<TInput = Record<string, unknown>, TOutput = unknown>(
+        name: string,
+        metadata: Omit<ToolDefinition<TInput, TOutput>, 'name'>,
+        handler: ToolHandler<TInput, TOutput>,
+    ): void;
+    tool<TInput = Record<string, unknown>, TOutput = unknown>(
+        definition: ToolDefinition<TInput, TOutput>,
+        handler: ToolHandler<TInput, TOutput>,
+    ): void;
     tool(
         arg1: string | ToolDefinition,
-        arg2: Omit<ToolDefinition, 'name'> | ((ctx: ToolContext) => Promise<unknown>),
-        arg3?: Omit<ToolDefinition, 'name'> | ((ctx: ToolContext) => Promise<unknown>),
+        arg2: Omit<ToolDefinition, 'name'> | AnyToolHandler,
+        arg3?: Omit<ToolDefinition, 'name'> | AnyToolHandler,
     ): void {
         const parsed = this.parseToolRegistration(arg1, arg2, arg3);
         this.tools.set(parsed.definition.name, parsed);
@@ -506,8 +535,8 @@ export class Qefro {
 
     private parseToolRegistration(
         arg1: string | ToolDefinition,
-        arg2: Omit<ToolDefinition, 'name'> | ((ctx: ToolContext) => Promise<unknown>),
-        arg3?: Omit<ToolDefinition, 'name'> | ((ctx: ToolContext) => Promise<unknown>),
+        arg2: Omit<ToolDefinition, 'name'> | AnyToolHandler,
+        arg3?: Omit<ToolDefinition, 'name'> | AnyToolHandler,
     ): ToolRegistration {
         if (typeof arg1 === 'string') {
             if (typeof arg2 === 'function') {
