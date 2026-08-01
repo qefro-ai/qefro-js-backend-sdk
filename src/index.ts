@@ -3,7 +3,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 type QefroRequestType = 'ping' | 'tools.list' | 'capabilities.list' | 'tool.invoke' | 'tool.resume';
 const SDK_NAME = '@qefro-ai/backend';
-const SDK_VERSION = '1.1.0';
+const SDK_VERSION = '1.3.0';
 
 export interface QefroConfig {
     signingSecret: string;
@@ -93,6 +93,9 @@ type ProtocolResponse =
           type: 'capabilities.list';
           tools: RegisteredTool[];
           flows: BusinessFlow[];
+          events?: EventHandlerDefinition[];
+          webhooks?: EventHandlerDefinition[];
+          schedules?: Array<EventHandlerDefinition & { cron: string }>;
           protocol_version?: string;
           sdk_version?: string;
           sdk_name?: string;
@@ -105,6 +108,13 @@ type ProtocolResponse =
  * Immutable identity + descriptive metadata for a Business Flow.
  * `id` is the identity key — renaming `name` never creates a new flow.
  */
+/** How a Business Flow is entered. Defaults to conversation (chat selection). */
+export type FlowTrigger =
+    | { type: 'conversation' }
+    | { type: 'event'; event: string; when?: string }
+    | { type: 'schedule'; cron: string }
+    | { type: 'webhook'; name?: string; when?: string };
+
 export interface BusinessFlowMetadata {
     id: string;
     name?: string;
@@ -119,6 +129,32 @@ export interface BusinessFlowMetadata {
     inputs?: string[];
     /** Values this flow produces (for analytics and future flow chaining). */
     outputs?: string[];
+    /**
+     * Entry trigger. Conversation (default) keeps Phase 2 behaviour.
+     * Event / schedule / webhook are Phase 3 triggers into the same runtime.
+     */
+    trigger?: FlowTrigger;
+}
+
+/** Standalone event / webhook / schedule handler advertised via capabilities.list. */
+export interface EventHandlerDefinition {
+    name: string;
+    description?: string;
+    /** Cron expression — required for schedule handlers. */
+    cron?: string;
+}
+
+export type EventHandler = (ctx: EventContext) => Promise<unknown> | unknown;
+
+export interface EventContext {
+    /** Fully-qualified event name. */
+    name: string;
+    source: string;
+    tenantId?: string;
+    correlationId?: string;
+    payload: unknown;
+    timestamp: Date;
+    logger: Pick<Console, 'info' | 'warn' | 'error'>;
 }
 
 export type FlowStepType =
@@ -312,6 +348,12 @@ interface FlowRegistration {
     steps: FlowStep[];
 }
 
+interface NamedHandlerRegistration {
+    definition: EventHandlerDefinition;
+    handler: EventHandler;
+    kind: 'event' | 'webhook' | 'schedule';
+}
+
 /**
  * Fluent builder returned by app.flow(). Steps are recorded into the SDK's
  * flow registry as they are declared; the SDK never executes them.
@@ -401,9 +443,58 @@ export function normalizeLookup(lookup?: ToolLookup): string[] {
     return out;
 }
 
+/** Validate and normalize a flow trigger; returns undefined for default conversation. */
+export function normalizeFlowTrigger(trigger?: FlowTrigger): FlowTrigger | undefined {
+    if (!trigger || typeof trigger !== 'object') return undefined;
+    switch (trigger.type) {
+        case 'conversation':
+            return { type: 'conversation' };
+        case 'event': {
+            const event = typeof trigger.event === 'string' ? trigger.event.trim() : '';
+            if (!event) throw new Error('trigger.type=event requires a non-empty event name');
+            if (!event.includes('.')) {
+                throw new Error(
+                    'trigger.event must be namespaced (e.g. shopify.order.created)',
+                );
+            }
+            const when =
+                typeof (trigger as { when?: unknown }).when === 'string' &&
+                (trigger as { when: string }).when.trim()
+                    ? (trigger as { when: string }).when.trim()
+                    : undefined;
+            return when ? { type: 'event', event, when } : { type: 'event', event };
+        }
+        case 'schedule': {
+            const cron = typeof trigger.cron === 'string' ? trigger.cron.trim() : '';
+            if (!cron) throw new Error('trigger.type=schedule requires a non-empty cron expression');
+            return { type: 'schedule', cron };
+        }
+        case 'webhook': {
+            const name =
+                typeof trigger.name === 'string' && trigger.name.trim()
+                    ? trigger.name.trim()
+                    : undefined;
+            const when =
+                typeof (trigger as { when?: unknown }).when === 'string' &&
+                (trigger as { when: string }).when.trim()
+                    ? (trigger as { when: string }).when.trim()
+                    : undefined;
+            if (name && when) return { type: 'webhook', name, when };
+            if (name) return { type: 'webhook', name };
+            if (when) return { type: 'webhook', when };
+            return { type: 'webhook' };
+        }
+        default:
+            throw new Error(`Unknown flow trigger type: ${(trigger as { type?: string }).type}`);
+    }
+}
+
 export class Qefro {
     private readonly tools = new Map<string, ToolRegistration>();
     private readonly flows = new Map<string, FlowRegistration>();
+    private readonly events = new Map<string, NamedHandlerRegistration>();
+    private readonly webhooks = new Map<string, NamedHandlerRegistration>();
+    private readonly schedules = new Map<string, NamedHandlerRegistration>();
     private readonly pending = new Map<string, PendingInvocation>();
     private readonly authByConversation = new Map<string, StoredAuth>();
     private readonly protocolVersion: string;
@@ -468,6 +559,12 @@ export class Qefro {
     /**
      * Register a Business Flow. Flows are metadata only: the SDK advertises them
      * through `capabilities.list` and the Qefro Runtime orchestrates execution.
+     *
+     * Optional `metadata.trigger` selects the entry path:
+     * - `{ type: 'conversation' }` (default) — chat / semantic selection
+     * - `{ type: 'event', event: 'shopify.order.created' }` — bus event
+     * - `{ type: 'schedule', cron: '0 9 * * *' }` — cron tick
+     * - `{ type: 'webhook', name?: 'shipment.delivered' }` — webhook alias
      */
     flow(metadata: BusinessFlowMetadata): FlowBuilder {
         const id = typeof metadata.id === 'string' ? metadata.id.trim() : '';
@@ -477,12 +574,86 @@ export class Qefro {
         if (this.flows.has(id)) {
             throw new Error(`Flow "${id}" is already registered`);
         }
+        const trigger = normalizeFlowTrigger(metadata.trigger);
         const registration: FlowRegistration = {
-            metadata: { ...metadata, id, version: metadata.version ?? 1 },
+            metadata: {
+                ...metadata,
+                id,
+                version: metadata.version ?? 1,
+                ...(trigger ? { trigger } : {}),
+            },
             steps: [],
         };
         this.flows.set(id, registration);
         return new FlowBuilder(registration);
+    }
+
+    /**
+     * Register a standalone event handler. Advertised via `capabilities.list`;
+     * the Qefro runtime owns delivery. Connectors emit into the bus — they never
+     * execute flows directly.
+     */
+    event(def: EventHandlerDefinition & { handler: EventHandler }): this;
+    event(def: EventHandlerDefinition, handler: EventHandler): this;
+    event(
+        def: EventHandlerDefinition & { handler?: EventHandler },
+        handler?: EventHandler,
+    ): this {
+        const h = handler ?? def.handler;
+        if (!h) throw new Error('event() requires a handler');
+        this.registerNamedHandler(this.events, 'event', def, h);
+        return this;
+    }
+
+    /** Register a webhook alias (normalized to an orchestration event at ingest). */
+    webhook(def: EventHandlerDefinition & { handler: EventHandler }): this;
+    webhook(def: EventHandlerDefinition, handler: EventHandler): this;
+    webhook(
+        def: EventHandlerDefinition & { handler?: EventHandler },
+        handler?: EventHandler,
+    ): this {
+        const h = handler ?? def.handler;
+        if (!h) throw new Error('webhook() requires a handler');
+        this.registerNamedHandler(this.webhooks, 'webhook', def, h);
+        return this;
+    }
+
+    /**
+     * Register a cron schedule. The runtime scheduler emits the named event;
+     * this does not run inside the SDK process.
+     */
+    schedule(def: EventHandlerDefinition & { cron: string; handler: EventHandler }): this;
+    schedule(def: EventHandlerDefinition & { cron: string }, handler: EventHandler): this;
+    schedule(
+        def: EventHandlerDefinition & { cron: string; handler?: EventHandler },
+        handler?: EventHandler,
+    ): this {
+        const cron = typeof def.cron === 'string' ? def.cron.trim() : '';
+        if (!cron) throw new Error('schedule() requires a non-empty cron expression');
+        const h = handler ?? def.handler;
+        if (!h) throw new Error('schedule() requires a handler');
+        this.registerNamedHandler(this.schedules, 'schedule', { ...def, cron }, h);
+        return this;
+    }
+
+    private registerNamedHandler(
+        map: Map<string, NamedHandlerRegistration>,
+        kind: 'event' | 'webhook' | 'schedule',
+        def: EventHandlerDefinition,
+        handler: EventHandler,
+    ): void {
+        const name = typeof def.name === 'string' ? def.name.trim() : '';
+        if (!name) throw new Error(`${kind}() requires a non-empty name`);
+        if (map.has(name)) throw new Error(`${kind} "${name}" is already registered`);
+        map.set(name, {
+            kind,
+            definition: {
+                name,
+                description: def.description,
+                ...(def.cron ? { cron: def.cron } : {}),
+            },
+            handler,
+        });
     }
 
     verifySignature(signature: string | undefined, timestamp: string | undefined, body: string): boolean {
@@ -594,6 +765,22 @@ export class Qefro {
         }));
     }
 
+    private listRegisteredEvents(): EventHandlerDefinition[] {
+        return [...this.events.values()].map((e) => e.definition);
+    }
+
+    private listRegisteredWebhooks(): EventHandlerDefinition[] {
+        return [...this.webhooks.values()].map((e) => e.definition);
+    }
+
+    private listRegisteredSchedules(): Array<EventHandlerDefinition & { cron: string }> {
+        return [...this.schedules.values()].map((e) => ({
+            name: e.definition.name,
+            description: e.definition.description,
+            cron: e.definition.cron ?? '',
+        }));
+    }
+
     private async handle(req: ProtocolRequest): Promise<ProtocolResponse> {
         if (req.protocol_version !== this.protocolVersion) {
             return { type: 'error', code: 'protocol_mismatch', message: 'Unsupported protocol version' };
@@ -617,6 +804,9 @@ export class Qefro {
                 type: 'capabilities.list',
                 tools: this.listRegisteredTools(),
                 flows: this.listRegisteredFlows(),
+                events: this.listRegisteredEvents(),
+                webhooks: this.listRegisteredWebhooks(),
+                schedules: this.listRegisteredSchedules(),
                 protocol_version: this.protocolVersion,
                 sdk_version: SDK_VERSION,
                 sdk_name: SDK_NAME,
