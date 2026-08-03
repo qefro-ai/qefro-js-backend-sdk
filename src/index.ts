@@ -3,7 +3,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 type QefroRequestType = 'ping' | 'tools.list' | 'capabilities.list' | 'tool.invoke' | 'tool.resume';
 const SDK_NAME = '@qefro-ai/backend';
-const SDK_VERSION = '1.3.0';
+const SDK_VERSION = '1.4.0';
 
 export interface QefroConfig {
     signingSecret: string;
@@ -84,6 +84,8 @@ interface ProtocolRequest {
     authentication?: Record<string, unknown>;
     resume_token?: string;
     challenge_response?: string;
+    /** Customer Hub Person snapshot from Qefro memory (not connector customer). */
+    person?: PersonRecord | null;
 }
 
 type ProtocolResponse =
@@ -100,7 +102,13 @@ type ProtocolResponse =
           sdk_version?: string;
           sdk_name?: string;
       }
-    | { type: 'result'; output: unknown; authentication_context?: AuthenticationContextPayload }
+    | {
+          type: 'result';
+          output: unknown;
+          authentication_context?: AuthenticationContextPayload;
+          /** Queued Customer Hub mutations for the Qefro runtime to apply. */
+          person_mutations?: PersonMutation[];
+      }
     | { type: 'challenge'; resume_token: string; challenge: ChallengePayload }
     | { type: 'error'; code: string; message: string };
 
@@ -165,7 +173,11 @@ export type FlowStepType =
     | 'condition'
     | 'delay'
     | 'approval'
-    | 'complete';
+    | 'complete'
+    | 'message'
+    | 'tag'
+    | 'assign'
+    | 'activity';
 
 export interface AskStepConfig {
     field: string;
@@ -203,6 +215,32 @@ export interface ApprovalStepConfig {
 
 export interface CompleteStepConfig {
     message?: string;
+}
+
+/** First-party outbound message (Customer Hub / WhatsApp fan-out). */
+export interface MessageStepConfig {
+    message: string;
+}
+
+/** First-party Person tag (no Business Tool required). */
+export interface TagStepConfig {
+    name: string;
+    color?: string;
+}
+
+/** First-party Person activity log. */
+export interface ActivityStepConfig {
+    activity_type: string;
+    source?: string;
+    payload?: Record<string, unknown>;
+}
+
+/** First-party Person → inbox assignment (handoff to human agent). */
+export interface AssignStepConfig {
+    /** User UUID, member email, org team name, role, or queue label (`sales`). */
+    to: string;
+    /** Hand conversations to inbox (default true). */
+    handoff?: boolean;
 }
 
 /** Wire shape of a flow step: type-specific settings live inside `config`. */
@@ -296,6 +334,97 @@ export interface CustomerContext {
     [key: string]: unknown;
 }
 
+/**
+ * Customer Hub Person — Qefro first-party memory.
+ *
+ * Distinct from {@link CustomerContext} (external systems / connector auth).
+ *
+ * ```text
+ * ctx.customer  →  external systems
+ * ctx.person    →  Qefro memory
+ * ```
+ */
+export interface PersonRecord {
+    id: string;
+    status?: string;
+    name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    source?: string | null;
+    workspace_id?: string;
+    assigned_to?: string | null;
+    conversation_count?: number;
+    identities?: unknown[];
+    attributes?: Record<string, unknown>;
+    tags?: unknown[];
+    activities?: unknown[];
+    [key: string]: unknown;
+}
+
+/** Mutations queued by `ctx.person.*` for the Qefro runtime to apply. */
+export type PersonMutation =
+    | { op: 'note'; content: string; author_id?: string }
+    | { op: 'tag'; name: string; color?: string }
+    | { op: 'activity'; activity_type: string; source?: string; payload?: Record<string, unknown> }
+    | { op: 'assign'; to: string; handoff?: boolean }
+    | { op: 'merge'; into: string };
+
+export interface PersonContext {
+    /** Current Person snapshot from Qefro (may be undefined for anonymous). */
+    get<T = PersonRecord>(): T | undefined;
+    /** Like get(), but throws if no Person is linked. */
+    require<T = PersonRecord>(): T;
+    /** Append an agent/system note on the Person timeline. */
+    note(content: string, options?: { author_id?: string }): Promise<void>;
+    /** Tag the Person in Customer Hub. */
+    tag(name: string, options?: { color?: string }): Promise<void>;
+    /** Record a Person activity. */
+    activity(
+        activityType: string,
+        options?: { source?: string; payload?: Record<string, unknown> },
+    ): Promise<void>;
+    /** Assign to a human agent / team and optionally hand off to inbox. */
+    assign(to: string, options?: { handoff?: boolean }): Promise<void>;
+    /** Merge this Person into another (survivor id). */
+    merge(intoPersonId: string): Promise<void>;
+}
+
+/** Canonical Customer Hub event names for flow triggers. */
+export const PersonEvents = {
+    Created: 'person.created',
+    Updated: 'person.updated',
+    StatusChanged: 'person.status.changed',
+    Merged: 'person.merged',
+    Assigned: 'person.assigned',
+    TagCreated: 'person.tag.created',
+    ActivityCreated: 'person.activity.created',
+} as const;
+
+export type PersonEventName = (typeof PersonEvents)[keyof typeof PersonEvents];
+
+/** Build an event trigger for a Customer Hub Person event. */
+export function personEventTrigger(event: PersonEventName | string, when?: string): FlowTrigger {
+    return when === undefined
+        ? { type: 'event', event }
+        : { type: 'event', event, when };
+}
+
+export function onPersonCreated(when?: string): FlowTrigger {
+    return personEventTrigger(PersonEvents.Created, when);
+}
+
+export function onPersonUpdated(when?: string): FlowTrigger {
+    return personEventTrigger(PersonEvents.Updated, when);
+}
+
+export function onPersonStatusChanged(when?: string): FlowTrigger {
+    return personEventTrigger(PersonEvents.StatusChanged, when);
+}
+
+export function onPersonMerged(when?: string): FlowTrigger {
+    return personEventTrigger(PersonEvents.Merged, when);
+}
+
 /** Typed tool handler: receives typed parameters, must return the declared output. */
 export type ToolHandler<TInput = Record<string, unknown>, TOutput = unknown> = (
     ctx: ToolContext<TInput>,
@@ -315,7 +444,16 @@ export interface ToolContext<TParameters = Record<string, unknown>> {
     channel?: string;
     authentication?: Record<string, unknown>;
     logger: Pick<Console, 'info' | 'warn' | 'error'>;
+    /**
+     * External / connector customer (org systems).
+     * Use for CRM lookups, order APIs, and organization auth.
+     */
     customer: CustomerContext;
+    /**
+     * Customer Hub Person (Qefro memory).
+     * Optional when the conversation has no linked Person yet.
+     */
+    person: PersonContext;
     requireCustomer<T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T>;
     authorizeCustomer<T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T>;
     /** @deprecated Use ctx.customer.lookup + ctx.customer.authorize */
@@ -395,6 +533,33 @@ export class FlowBuilder {
 
     complete(step: { id: string } & CompleteStepConfig): this {
         return this.push(step.id, 'complete', { message: step.message });
+    }
+
+    /** Outbound message to the conversation / Person WhatsApp channel. */
+    message(step: { id: string } & MessageStepConfig): this {
+        return this.push(step.id, 'message', { message: step.message });
+    }
+
+    /** Tag the linked Customer Hub Person. */
+    tag(step: { id: string } & TagStepConfig): this {
+        return this.push(step.id, 'tag', { name: step.name, color: step.color });
+    }
+
+    /** Record a Person activity (timeline). */
+    activity(step: { id: string } & ActivityStepConfig): this {
+        return this.push(step.id, 'activity', {
+            activity_type: step.activity_type,
+            source: step.source,
+            payload: step.payload,
+        });
+    }
+
+    /** Assign Person to a human agent and hand linked conversations to the inbox. */
+    assign(step: { id: string } & AssignStepConfig): this {
+        return this.push(step.id, 'assign', {
+            to: step.to,
+            handoff: step.handoff,
+        });
     }
 
     private push(id: string, type: FlowStepType, config: Record<string, unknown>): this {
@@ -840,6 +1005,7 @@ export class Qefro {
                 pending.channel,
                 req.challenge_response,
                 req.authentication,
+                req.person,
             );
         }
 
@@ -851,6 +1017,7 @@ export class Qefro {
             req.channel,
             undefined,
             req.authentication,
+            req.person,
         );
     }
 
@@ -862,6 +1029,7 @@ export class Qefro {
         channel?: string,
         authResponse?: string,
         authentication?: Record<string, unknown>,
+        personSnapshot?: PersonRecord | null,
     ): Promise<ProtocolResponse> {
         const registration = this.tools.get(toolName);
         if (!registration) {
@@ -885,6 +1053,12 @@ export class Qefro {
             authResponse,
         });
 
+        const personMutations: PersonMutation[] = [];
+        const person = this.buildPersonContext({
+            snapshot: personSnapshot,
+            mutations: personMutations,
+        });
+
         const ctx: ToolContext = {
             identity: identity ?? {},
             parameters,
@@ -893,6 +1067,7 @@ export class Qefro {
             authentication,
             logger: console,
             customer,
+            person,
             requireCustomer: async <T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T> => {
                 const outcome = await resolver(this.authBuilder(authResponse));
                 return this.consumeAuthOutcome(outcome, conversationId, state);
@@ -926,6 +1101,7 @@ export class Qefro {
                 type: 'result',
                 output,
                 authentication_context: latest?.auth,
+                person_mutations: personMutations.length > 0 ? personMutations : undefined,
             };
         } catch (err) {
             if (err instanceof ChallengeSignal) {
@@ -950,6 +1126,13 @@ export class Qefro {
             }
             if (message === 'customer_not_found') {
                 return { type: 'error', code: 'customer_not_found', message: 'Customer not found' };
+            }
+            if (message === 'person_not_found') {
+                return {
+                    type: 'error',
+                    code: 'person_not_found',
+                    message: 'No Customer Hub Person is linked to this conversation.',
+                };
             }
             if (message === 'customer_provider_missing') {
                 return {
@@ -1064,6 +1247,100 @@ export class Qefro {
                 return undefined;
             },
         }) as CustomerContext;
+    }
+
+    /**
+     * Customer Hub Person context. Mutations are queued for the runtime —
+     * the SDK never writes Qefro memory directly.
+     */
+    private buildPersonContext(args: {
+        snapshot?: PersonRecord | null;
+        mutations: PersonMutation[];
+    }): PersonContext {
+        let current: PersonRecord | undefined =
+            args.snapshot && typeof args.snapshot === 'object' && args.snapshot.id
+                ? { ...args.snapshot }
+                : undefined;
+
+        const requireId = (): string => {
+            if (!current?.id) {
+                throw new Error('person_not_found');
+            }
+            return current.id;
+        };
+
+        return {
+            get: <T = PersonRecord>(): T | undefined => current as T | undefined,
+            require: <T = PersonRecord>(): T => {
+                if (!current) {
+                    throw new Error('person_not_found');
+                }
+                return current as T;
+            },
+            note: async (content: string, options?: { author_id?: string }): Promise<void> => {
+                requireId();
+                const trimmed = content.trim();
+                if (!trimmed) {
+                    throw new Error('person_note_empty');
+                }
+                args.mutations.push({
+                    op: 'note',
+                    content: trimmed,
+                    author_id: options?.author_id,
+                });
+            },
+            tag: async (name: string, options?: { color?: string }): Promise<void> => {
+                requireId();
+                const trimmed = name.trim();
+                if (!trimmed) {
+                    throw new Error('person_tag_empty');
+                }
+                args.mutations.push({
+                    op: 'tag',
+                    name: trimmed,
+                    color: options?.color,
+                });
+                const tags = Array.isArray(current?.tags) ? [...current!.tags!] : [];
+                tags.push({ name: trimmed, color: options?.color ?? null });
+                current = { ...current!, tags };
+            },
+            activity: async (
+                activityType: string,
+                options?: { source?: string; payload?: Record<string, unknown> },
+            ): Promise<void> => {
+                requireId();
+                const trimmed = activityType.trim();
+                if (!trimmed) {
+                    throw new Error('person_activity_empty');
+                }
+                args.mutations.push({
+                    op: 'activity',
+                    activity_type: trimmed,
+                    source: options?.source ?? 'sdk',
+                    payload: options?.payload,
+                });
+            },
+            assign: async (to: string, options?: { handoff?: boolean }): Promise<void> => {
+                requireId();
+                const trimmed = to.trim();
+                if (!trimmed) {
+                    throw new Error('person_assign_empty');
+                }
+                args.mutations.push({
+                    op: 'assign',
+                    to: trimmed,
+                    handoff: options?.handoff,
+                });
+            },
+            merge: async (intoPersonId: string): Promise<void> => {
+                requireId();
+                const into = intoPersonId.trim();
+                if (!into) {
+                    throw new Error('person_merge_target_empty');
+                }
+                args.mutations.push({ op: 'merge', into });
+            },
+        };
     }
 
     private authBuilder<T>(authResponse?: string): AuthBuilder<T> {

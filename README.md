@@ -80,7 +80,35 @@ app
   .complete({ id: 'done', message: 'Here are your recent orders.' });
 ```
 
-Every step needs a unique `id`; `tool` steps reference an existing Business Tool by `tool_ref`. Step builders: `.ask() .tool() .challenge() .upload() .condition() .delay() .approval() .complete()`. See [`examples/flows`](examples/flows).
+Every step needs a unique `id`; `tool` steps reference an existing Business Tool by `tool_ref`. Step builders: `.ask() .tool() .challenge() .upload() .condition() .delay() .approval() .complete() .message() .tag() .assign() .activity()`. See [`examples/flows`](examples/flows) and [`examples/person-hub-flows`](examples/person-hub-flows).
+
+### Customer Hub (`ctx.person`)
+
+Keep connector customer and Qefro Person separate:
+
+```ts
+// External systems (CRM, orders, org auth)
+await ctx.customer.lookup();
+
+// Qefro memory (Customer Hub)
+const person = ctx.person.get();
+await ctx.person.tag('vip');
+await ctx.person.assign('sales');
+await ctx.person.activity('note.logged', { payload: { source: 'tool' } });
+```
+
+Event triggers:
+
+```ts
+import { onPersonCreated, PersonEvents } from '@qefro-ai/backend';
+
+app.flow({
+  id: 'welcome',
+  trigger: onPersonCreated(), // or { type: 'event', event: PersonEvents.Created }
+})
+  .message({ id: 'hi', message: 'Hi {{person.name}}' })
+  .complete({ id: 'done' });
+```
 
 Docs: [Define Business Flows](https://docs.qefro.com/docs/guides/define-business-flows)
 
