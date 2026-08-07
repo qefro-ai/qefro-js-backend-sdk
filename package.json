@@ -1,6 +1,6 @@
 {
   "name": "@qefro-ai/backend",
-  "version": "1.4.0",
+  "version": "1.7.0",
   "description": "Qefro backend framework for business tool handlers and customer authorization orchestration",
   "license": "MIT",
   "author": "Qefro",
@@ -29,6 +29,8 @@
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts --format esm --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run build && node --test test/*.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {

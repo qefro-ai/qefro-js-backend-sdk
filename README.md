@@ -57,6 +57,46 @@ Set the same signing secret in Admin Console → **Business Tools → SDK Connec
 
 Docs: [Register SDK Business Tools](https://docs.qefro.com/docs/guides/register-sdk-business-tools)
 
+## Managed storage (`ctx.storage`)
+
+Application tools persist via managed storage (ADR-002 / ADR-003). Never call
+Mongo or storage-service URLs yourself — use the SDK:
+
+```ts
+app.tool(
+  {
+    name: 'restaurant.createReservation',
+    description: 'Create a table reservation',
+    auth: 'none',
+    input_schema: {
+      type: 'object',
+      properties: {
+        guest_name: { type: 'string' },
+        covers: { type: 'number' },
+        date: { type: 'string' },
+        time: { type: 'string' },
+      },
+      required: ['guest_name', 'covers', 'date', 'time'],
+    },
+  },
+  async (ctx) => {
+    return ctx.storage.insert(
+      'reservations',
+      {
+        customer_name: ctx.parameters.guest_name,
+        guest_count: ctx.parameters.covers,
+        reservation_time: `${ctx.parameters.date} ${ctx.parameters.time}`,
+        status: 'confirmed',
+      },
+      { allocate_code: { prefix: 'R-', start: 1001 } },
+    );
+  },
+);
+```
+
+`tool.invoke` may include `platform.storage.{base_url,token,context}`. Managed
+hosts can also set `QEFRO_STORAGE_URL` + `QEFRO_SERVICE_TOKEN`.
+
 ## Business Flows
 
 Flows describe how your Business Tools are orchestrated. They are **metadata only** — the SDK advertises them through `capabilities.list` and the Qefro Runtime discovers, validates, versions, and (later) executes them. Nothing runs inside the SDK.
