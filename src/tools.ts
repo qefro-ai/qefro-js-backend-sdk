@@ -6,7 +6,7 @@ import type {
     TimelineContext,
 } from './customer.js';
 import type { PersonContext } from './person.js';
-import type { StorageContext } from './storage.js';
+import type { PlatformCapabilities, StorageContext } from './storage.js';
 
 export type ToolAuthMode = 'none' | 'optional' | 'required';
 
@@ -71,6 +71,12 @@ export interface ToolContext<TParameters = Record<string, unknown>> {
     channel?: string;
     authentication?: Record<string, unknown>;
     logger: Pick<Console, 'info' | 'warn' | 'error'>;
+    /**
+     * Platform capabilities from `tool.invoke` (`storage`, `customer`,
+     * `marketing`, `channels`). Apps read workspace WhatsApp digits from
+     * `platform.channels.whatsapp.phone_number` — never install settings.
+     */
+    platform?: PlatformCapabilities;
     /**
      * Correlation id from `x-qefro-trace-id` when the platform forwarded it
      * (stabilization Phase 1 — headers only; `/qefro` body unchanged).

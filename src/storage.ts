@@ -39,6 +39,13 @@ export interface PlatformMarketingBinding {
     context: PlatformMarketingContext;
 }
 
+/** Workspace-owned customer channels (phone digits only — never tokens). */
+export interface PlatformChannelsBinding {
+    whatsapp?: {
+        phone_number?: string;
+    };
+}
+
 export interface PlatformCapabilities {
     storage?: {
         base_url?: string;
@@ -53,6 +60,8 @@ export interface PlatformCapabilities {
     };
     /** Optional Marketing registry binding (QEFRO_MARKETING_ENABLED). */
     marketing?: PlatformMarketingBinding;
+    /** Workspace communication channels injected by the platform (ADR channel ownership). */
+    channels?: PlatformChannelsBinding;
 }
 
 /** Document storage via storage-service (ADR-002). Used only from app tools. */

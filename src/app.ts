@@ -505,6 +505,7 @@ export class Qefro {
             channel,
             authentication,
             logger,
+            platform,
             trace_id: traceId,
             customer,
             person,
