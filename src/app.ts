@@ -60,6 +60,12 @@ import {
     type ToolRegistration,
 } from './tools.js';
 import { verifySignature } from './transport.js';
+import {
+    toMarketingCapability,
+    validateMarketingDefinition,
+    type MarketingDefinition,
+    type MarketingRegistration,
+} from './marketing.js';
 
 export class Qefro {
     private readonly tools = new Map<string, ToolRegistration>();
@@ -77,6 +83,7 @@ export class Qefro {
     private readonly beforeHooks: BeforeHook[] = [];
     private readonly afterHooks: AfterHook[] = [];
     private customerProvider?: CustomerProvider;
+    private marketingRegistration?: MarketingRegistration;
 
     constructor(config: QefroConfig) {
         this.signingSecret = config.signingSecret;
@@ -102,6 +109,19 @@ export class Qefro {
 
     customer(provider: CustomerProvider): this {
         this.customerProvider = provider;
+        return this;
+    }
+
+    /**
+     * Register Marketing metadata (ADR-004 Phase 1). Metadata only — the SDK
+     * advertises it through `capabilities.list.marketing`; the platform owns
+     * campaigns, delivery, and analytics.
+     */
+    marketing(def: MarketingDefinition): this {
+        if (this.marketingRegistration) {
+            throw new Error('marketing() may only be called once');
+        }
+        this.marketingRegistration = validateMarketingDefinition(def);
         return this;
     }
 
@@ -336,6 +356,9 @@ export class Qefro {
                 events: this.listRegisteredEvents(),
                 webhooks: this.listRegisteredWebhooks(),
                 schedules: this.listRegisteredSchedules(),
+                ...(this.marketingRegistration
+                    ? { marketing: toMarketingCapability(this.marketingRegistration) }
+                    : {}),
                 protocol_version: this.protocolVersion,
                 sdk_version: SDK_VERSION,
                 sdk_name: SDK_NAME,

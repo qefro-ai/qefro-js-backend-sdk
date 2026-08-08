@@ -4,6 +4,7 @@ import type { RegisteredTool } from './tools.js';
 import type { BusinessFlow } from './flow.js';
 import type { EventHandlerDefinition } from './events.js';
 import type { AuthenticationContextPayload, ChallengePayload } from './auth.js';
+import type { MarketingCapability } from './marketing.js';
 
 export type QefroRequestType = 'ping' | 'tools.list' | 'capabilities.list' | 'tool.invoke' | 'tool.resume';
 
@@ -46,6 +47,8 @@ export type ProtocolResponse =
           events?: EventHandlerDefinition[];
           webhooks?: EventHandlerDefinition[];
           schedules?: Array<EventHandlerDefinition & { cron: string }>;
+          /** Present when `app.marketing(...)` was registered. */
+          marketing?: MarketingCapability;
           protocol_version?: string;
           sdk_version?: string;
           sdk_name?: string;

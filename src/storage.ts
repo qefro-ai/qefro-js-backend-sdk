@@ -1,4 +1,4 @@
-/** Platform capabilities injected on tool.invoke (ADR-002 / ADR-003). */
+/** Platform capabilities injected on tool.invoke (ADR-002 / ADR-003 / ADR-004). */
 export interface PlatformStorageContext {
     tenant_id: string;
     workspace_id: string;
@@ -22,6 +22,23 @@ export interface PlatformCustomerContext {
     source?: string;
 }
 
+/** Marketing registry gateway for sdk.marketing.* (ADR-004). */
+export interface PlatformMarketingContext {
+    tenant_id: string;
+    workspace_id: string;
+    installation_id?: string | null;
+    solution_id?: string;
+    identity_id?: string | null;
+    capabilities?: string[];
+    source?: string;
+}
+
+export interface PlatformMarketingBinding {
+    base_url?: string;
+    token?: string;
+    context: PlatformMarketingContext;
+}
+
 export interface PlatformCapabilities {
     storage?: {
         base_url?: string;
@@ -34,6 +51,8 @@ export interface PlatformCapabilities {
         token?: string;
         context: PlatformCustomerContext;
     };
+    /** Optional Marketing registry binding (QEFRO_MARKETING_ENABLED). */
+    marketing?: PlatformMarketingBinding;
 }
 
 /** Document storage via storage-service (ADR-002). Used only from app tools. */

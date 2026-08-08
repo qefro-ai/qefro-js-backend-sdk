@@ -23,6 +23,8 @@ export { normalizeLookup } from './tools.js';
 export type {
     PlatformStorageContext,
     PlatformCustomerContext,
+    PlatformMarketingContext,
+    PlatformMarketingBinding,
     PlatformCapabilities,
     StorageContext,
 } from './storage.js';
@@ -106,3 +108,29 @@ export {
 } from './person.js';
 
 export type { Middleware, BeforeHook, AfterHook } from './middleware.js';
+
+export type {
+    MarketingAudienceSource,
+    MarketingVariableType,
+    MarketingVariableSource,
+    MarketingActionKind,
+    MarketingLandingHost,
+    MarketingChannelId,
+    MarketingAudienceCustomerHub,
+    MarketingAudienceAppQuery,
+    MarketingAudience,
+    MarketingVariable,
+    MarketingAction,
+    MarketingLandingPage,
+    MarketingChannel,
+    MarketingDefinition,
+    MarketingRegistration,
+    MarketingCapability,
+    MarketingContext,
+} from './marketing.js';
+export {
+    validateMarketingDefinition,
+    toMarketingCapability,
+    isMarketingEnabled,
+    buildMarketingContext,
+} from './marketing.js';
