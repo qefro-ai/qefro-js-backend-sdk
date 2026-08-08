@@ -5,6 +5,7 @@ import type { BusinessFlow } from './flow.js';
 import type { EventHandlerDefinition } from './events.js';
 import type { AuthenticationContextPayload, ChallengePayload } from './auth.js';
 import type { MarketingCapability } from './marketing.js';
+import type { OrganizationCapability } from './organization.js';
 
 export type QefroRequestType = 'ping' | 'tools.list' | 'capabilities.list' | 'tool.invoke' | 'tool.resume';
 
@@ -49,6 +50,8 @@ export type ProtocolResponse =
           schedules?: Array<EventHandlerDefinition & { cron: string }>;
           /** Present when `app.marketing(...)` was registered. */
           marketing?: MarketingCapability;
+          /** Present when `app.organization(...)` was registered (ADR-005). */
+          organization?: OrganizationCapability;
           protocol_version?: string;
           sdk_version?: string;
           sdk_name?: string;

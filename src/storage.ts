@@ -1,4 +1,4 @@
-/** Platform capabilities injected on tool.invoke (ADR-002 / ADR-003 / ADR-004). */
+/** Platform capabilities injected on tool.invoke (ADR-002 / ADR-003 / ADR-004 / ADR-005). */
 export interface PlatformStorageContext {
     tenant_id: string;
     workspace_id: string;
@@ -39,6 +39,23 @@ export interface PlatformMarketingBinding {
     context: PlatformMarketingContext;
 }
 
+/** Organization capability registry gateway (ADR-005). */
+export interface PlatformOrganizationContext {
+    tenant_id: string;
+    workspace_id: string;
+    installation_id?: string | null;
+    solution_id?: string;
+    identity_id?: string | null;
+    capabilities?: string[];
+    source?: string;
+}
+
+export interface PlatformOrganizationBinding {
+    base_url?: string;
+    token?: string;
+    context: PlatformOrganizationContext;
+}
+
 /** Workspace-owned customer channels (phone digits only — never tokens). */
 export interface PlatformChannelsBinding {
     whatsapp?: {
@@ -60,6 +77,8 @@ export interface PlatformCapabilities {
     };
     /** Optional Marketing registry binding (QEFRO_MARKETING_ENABLED). */
     marketing?: PlatformMarketingBinding;
+    /** Optional Organization capability binding (QEFRO_ORGANIZATION_ENABLED). */
+    organization?: PlatformOrganizationBinding;
     /** Workspace communication channels injected by the platform (ADR channel ownership). */
     channels?: PlatformChannelsBinding;
 }

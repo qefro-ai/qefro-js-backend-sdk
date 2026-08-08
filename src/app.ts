@@ -66,6 +66,12 @@ import {
     type MarketingDefinition,
     type MarketingRegistration,
 } from './marketing.js';
+import {
+    toOrganizationCapability,
+    validateOrganizationDefinition,
+    type OrganizationCapabilities,
+    type OrganizationDefinition,
+} from './organization.js';
 
 export class Qefro {
     private readonly tools = new Map<string, ToolRegistration>();
@@ -84,6 +90,7 @@ export class Qefro {
     private readonly afterHooks: AfterHook[] = [];
     private customerProvider?: CustomerProvider;
     private marketingRegistration?: MarketingRegistration;
+    private organizationCapabilities?: OrganizationCapabilities;
 
     constructor(config: QefroConfig) {
         this.signingSecret = config.signingSecret;
@@ -122,6 +129,19 @@ export class Qefro {
             throw new Error('marketing() may only be called once');
         }
         this.marketingRegistration = validateMarketingDefinition(def);
+        return this;
+    }
+
+    /**
+     * Register Organization capability metadata (ADR-005 Phase 1). Metadata
+     * only — advertised through `capabilities.list.organization`. The platform
+     * owns the capability graph, workflows, and inbox.
+     */
+    organization(def: OrganizationDefinition): this {
+        if (this.organizationCapabilities) {
+            throw new Error('organization() may only be called once');
+        }
+        this.organizationCapabilities = validateOrganizationDefinition(def);
         return this;
     }
 
@@ -358,6 +378,13 @@ export class Qefro {
                 schedules: this.listRegisteredSchedules(),
                 ...(this.marketingRegistration
                     ? { marketing: toMarketingCapability(this.marketingRegistration) }
+                    : {}),
+                ...(this.organizationCapabilities
+                    ? {
+                          organization: toOrganizationCapability(
+                              this.organizationCapabilities,
+                          ),
+                      }
                     : {}),
                 protocol_version: this.protocolVersion,
                 sdk_version: SDK_VERSION,

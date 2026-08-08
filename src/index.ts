@@ -25,6 +25,8 @@ export type {
     PlatformCustomerContext,
     PlatformMarketingContext,
     PlatformMarketingBinding,
+    PlatformOrganizationContext,
+    PlatformOrganizationBinding,
     PlatformCapabilities,
     StorageContext,
 } from './storage.js';
@@ -134,3 +136,19 @@ export {
     isMarketingEnabled,
     buildMarketingContext,
 } from './marketing.js';
+export type {
+    OrganizationTaskPriority,
+    OrganizationEvent,
+    OrganizationAction,
+    OrganizationTaskType,
+    OrganizationDefinition,
+    OrganizationCapabilities,
+    OrganizationCapability,
+    OrganizationContext,
+} from './organization.js';
+export {
+    validateOrganizationDefinition,
+    toOrganizationCapability,
+    isOrganizationEnabled,
+    buildOrganizationContext,
+} from './organization.js';
