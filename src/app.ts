@@ -73,6 +73,8 @@ import {
     type OrganizationDefinition,
 } from './organization.js';
 
+const PENDING_TTL_MS = 15 * 60 * 1000;
+
 export class Qefro {
     private readonly tools = new Map<string, ToolRegistration>();
     private readonly flows = new Map<string, FlowRegistration>();
@@ -286,12 +288,18 @@ export class Qefro {
         });
 
         await new Promise<void>((resolve, reject) => {
-            server.once('error', reject);
-            server.listen(options.port, host, () => resolve());
+            const onError = (err: Error) => reject(err);
+            server.once('error', onError);
+            server.listen(options.port, host, () => {
+                server.removeListener('error', onError);
+                resolve();
+            });
         });
 
+        const addr = server.address();
+        const boundPort = addr && typeof addr === 'object' ? addr.port : options.port;
         return {
-            url: `http://${host}:${options.port}${path}`,
+            url: `http://${host}:${boundPort}${path}`,
             close: () =>
                 new Promise<void>((resolve, reject) => {
                     server.close((err) => (err ? reject(err) : resolve()));
@@ -407,11 +415,10 @@ export class Qefro {
                 };
             }
 
-            const pending = this.pending.get(req.resume_token);
+            const pending = this.takePending(req.resume_token);
             if (!pending) {
                 return { type: 'error', code: 'not_found', message: 'resume token not found or expired' };
             }
-            this.pending.delete(req.resume_token);
 
             return this.invokeTool(
                 pending.tool,
@@ -458,10 +465,10 @@ export class Qefro {
             return { type: 'error', code: 'not_found', message: `Unknown tool: ${toolName}` };
         }
 
-        const stored = this.authByConversation.get(conversationId);
-        const hasValidStored = Boolean(stored && stored.expiresAt > Date.now());
+        const stored = this.getStoredAuth(conversationId);
+        const hasValidStored = Boolean(stored);
         const state: CustomerState = {
-            current: hasValidStored ? stored?.customer : undefined,
+            current: stored?.customer,
             lookupCompleted: hasValidStored,
         };
 
@@ -484,13 +491,7 @@ export class Qefro {
             authResponse,
             platform,
             customerProvider: this.customerProvider,
-            getCachedAuth: () => {
-                const existing = this.authByConversation.get(conversationId);
-                if (existing && existing.expiresAt > Date.now()) {
-                    return existing.customer;
-                }
-                return undefined;
-            },
+            getCachedAuth: () => this.getStoredAuth(conversationId)?.customer,
             consumeAuthOutcome: (outcome, conversationId, customerState) =>
                 this.consumeAuthOutcome(outcome, conversationId, customerState),
         });
@@ -525,6 +526,13 @@ export class Qefro {
         });
         const consent = buildConsentContext({ platform, state });
 
+        const resolveAuth = async <T>(
+            resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>,
+        ): Promise<T> => {
+            const outcome = await resolver(createAuthBuilder(authResponse));
+            return this.consumeAuthOutcome(outcome, conversationId, state);
+        };
+
         const ctx: ToolContext = {
             identity: identity ?? {},
             parameters,
@@ -540,18 +548,9 @@ export class Qefro {
             timeline,
             membership,
             consent,
-            requireCustomer: async <T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T> => {
-                const outcome = await resolver(createAuthBuilder(authResponse));
-                return this.consumeAuthOutcome(outcome, conversationId, state);
-            },
-            authorizeCustomer: async <T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T> => {
-                const outcome = await resolver(createAuthBuilder(authResponse));
-                return this.consumeAuthOutcome(outcome, conversationId, state);
-            },
-            requireAuthentication: async <T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T> => {
-                const outcome = await resolver(createAuthBuilder(authResponse));
-                return this.consumeAuthOutcome(outcome, conversationId, state);
-            },
+            requireCustomer: resolveAuth,
+            authorizeCustomer: resolveAuth,
+            requireAuthentication: resolveAuth,
         };
 
         try {
@@ -568,7 +567,7 @@ export class Qefro {
                 output = await hook(ctx, output);
             }
 
-            const latest = this.authByConversation.get(conversationId);
+            const latest = this.getStoredAuth(conversationId);
             return {
                 type: 'result',
                 output,
@@ -578,6 +577,7 @@ export class Qefro {
         } catch (err) {
             if (err instanceof ChallengeSignal) {
                 const resumeToken = randomUUID();
+                this.pruneExpiredPending();
                 this.pending.set(resumeToken, {
                     tool: toolName,
                     conversationId,
@@ -585,6 +585,7 @@ export class Qefro {
                     identity,
                     channel,
                     platform,
+                    createdAt: Date.now(),
                 });
                 return {
                     type: 'challenge',
@@ -619,6 +620,31 @@ export class Qefro {
         }
     }
 
+    private takePending(token: string): PendingInvocation | undefined {
+        this.pruneExpiredPending();
+        const pending = this.pending.get(token);
+        if (!pending) return undefined;
+        this.pending.delete(token);
+        return pending;
+    }
+
+    private pruneExpiredPending(): void {
+        const now = Date.now();
+        for (const [token, pending] of this.pending) {
+            if (now - pending.createdAt > PENDING_TTL_MS) this.pending.delete(token);
+        }
+    }
+
+    private getStoredAuth(conversationId: string): StoredAuth | undefined {
+        const stored = this.authByConversation.get(conversationId);
+        if (!stored) return undefined;
+        if (stored.expiresAt <= Date.now()) {
+            this.authByConversation.delete(conversationId);
+            return undefined;
+        }
+        return stored;
+    }
+
     private consumeAuthOutcome<T>(outcome: AuthOutcome<T>, conversationId: string, state: CustomerState): T {
         if (outcome.kind === 'success') {
             const expiresIn = Math.max(1, outcome.auth.expires_in ?? 900);
@@ -650,7 +676,8 @@ export class Qefro {
     ): Promise<void> {
         applyProtocolHeaders(res, this.protocolVersion);
 
-        if ((req.method ?? 'GET').toUpperCase() !== 'POST' || (req.url ?? '') !== path) {
+        const urlPath = (req.url ?? '').split('?')[0];
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST' || urlPath !== path) {
             res.statusCode = 404;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ error: 'not_found' }));
@@ -664,6 +691,7 @@ export class Qefro {
                 'x-qefro-timestamp': headerValue(req, 'x-qefro-timestamp'),
                 'x-qefro-protocol': headerValue(req, 'x-qefro-protocol'),
                 'x-qefro-protocol-version': headerValue(req, 'x-qefro-protocol-version'),
+                'x-qefro-trace-id': headerValue(req, 'x-qefro-trace-id'),
             };
 
             const protocolHeader = headers['x-qefro-protocol'] ?? headers['x-qefro-protocol-version'];
@@ -694,7 +722,7 @@ export class Qefro {
             }
 
             const protocolReq = JSON.parse(body) as ProtocolRequest;
-            const protocolResp = await this.handle(protocolReq);
+            const protocolResp = await this.handle(protocolReq, headers);
             res.statusCode = 200;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify(protocolResp));

@@ -45,6 +45,7 @@ export interface PendingInvocation {
     identity?: Record<string, unknown>;
     channel?: string;
     platform?: PlatformCapabilities;
+    createdAt: number;
 }
 
 export interface StoredAuth {

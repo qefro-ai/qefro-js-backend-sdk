@@ -1,5 +1,8 @@
 import type { AuthOutcome } from './auth.js';
+import { envFlagTrue } from './env.js';
 import type { PlatformCapabilities, PlatformCustomerContext } from './storage.js';
+
+export { envFlagTrue } from './env.js';
 
 export interface CustomerState {
     current?: unknown;
@@ -148,25 +151,6 @@ export function readIdentityPhone(identity: Record<string, unknown>): string | u
         if (typeof value === 'string' && value.trim()) return value.trim();
     }
     return undefined;
-}
-
-export function envFlagTrue(name: string, defaultValue = false): boolean {
-    const raw = process.env[name];
-    if (raw == null || raw === '') return defaultValue;
-    switch (raw.trim().toLowerCase()) {
-        case '1':
-        case 'true':
-        case 'yes':
-        case 'on':
-            return true;
-        case '0':
-        case 'false':
-        case 'no':
-        case 'off':
-            return false;
-        default:
-            return defaultValue;
-    }
 }
 
 /** Master switch — when false, hub methods soft-skip (never call Hub). */

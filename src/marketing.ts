@@ -1,3 +1,4 @@
+import { envFlagTrue } from './env.js';
 import type {
     PlatformCapabilities,
     PlatformMarketingBinding,
@@ -438,25 +439,6 @@ export function toMarketingCapability(reg: MarketingRegistration): MarketingCapa
             channels: reg.channels,
         },
     };
-}
-
-function envFlagTrue(name: string, defaultValue = false): boolean {
-    const raw = process.env[name];
-    if (raw == null || raw === '') return defaultValue;
-    switch (raw.trim().toLowerCase()) {
-        case '1':
-        case 'true':
-        case 'yes':
-        case 'on':
-            return true;
-        case '0':
-        case 'false':
-        case 'no':
-        case 'off':
-            return false;
-        default:
-            return defaultValue;
-    }
 }
 
 export function isMarketingEnabled(): boolean {

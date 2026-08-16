@@ -96,6 +96,43 @@ describe('@qefro-ai/backend module split smoke', () => {
         assert.deepEqual(result.output, { ok: true, n: 7 });
     });
 
+    it('HTTP listen binds the real port and forwards trace id', async () => {
+        const secret = 'test-secret';
+        const app = new Qefro({ signingSecret: secret });
+        app.tool('echo', async (ctx) => ({ trace: ctx.trace_id, n: ctx.parameters.n }));
+
+        const handle = await app.listen({ port: 0, host: '127.0.0.1' });
+        try {
+            const url = new URL(handle.url);
+            assert.notEqual(url.port, '0');
+            const invokeBody = JSON.stringify({
+                protocol_version: '1',
+                request_id: 'r-http',
+                type: 'tool.invoke',
+                tool: 'echo',
+                conversation_id: 'c-http',
+                parameters: { n: 3 },
+            });
+            const invokeSig = sign(secret, invokeBody);
+            const res = await fetch(`${handle.url}?ignored=1`, {
+                method: 'POST',
+                headers: {
+                    'content-type': 'application/json',
+                    'x-qefro-signature': invokeSig.signature,
+                    'x-qefro-timestamp': invokeSig.timestamp,
+                    'x-qefro-trace-id': 'trace-http-1',
+                },
+                body: invokeBody,
+            });
+            assert.equal(res.ok, true);
+            const result = await res.json();
+            assert.equal(result.type, 'result');
+            assert.deepEqual(result.output, { trace: 'trace-http-1', n: 3 });
+        } finally {
+            await handle.close();
+        }
+    });
+
     it('rejects invalid signatures', async () => {
         const app = new Qefro({ signingSecret: 'secret' });
         const body = JSON.stringify({ protocol_version: '1', request_id: 'r', type: 'ping' });
