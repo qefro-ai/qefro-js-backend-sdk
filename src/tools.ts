@@ -43,6 +43,12 @@ export interface ToolDefinition<
      * SDK never hardcodes WhatsApp/Widget/Portal rules.
      */
     lookup?: ToolLookup;
+    /**
+     * When `false`, Qefro will not offer this tool on customer chat channels
+     * (WhatsApp / widget). Use for staff-only / org-workflow actions
+     * (approve, reject, finalize). Default: `true`.
+     */
+    chat?: boolean;
 }
 
 export interface RegisteredTool {
@@ -54,6 +60,8 @@ export interface RegisteredTool {
     permissions?: string[];
     timeout?: number;
     lookup?: ToolLookup;
+    /** `false` = staff/org only — not offered on customer chat. */
+    chat?: boolean;
 }
 
 /** Typed tool handler: receives typed parameters, must return the declared output. */
@@ -71,6 +79,14 @@ export interface ToolContext<TParameters = Record<string, unknown>> {
     channel?: string;
     authentication?: Record<string, unknown>;
     logger: Pick<Console, 'info' | 'warn' | 'error'>;
+    /**
+     * Per-install solution settings from the marketplace install
+     * (e.g. `medusa_api_url`, `medusa_api_key`). Prefer these over process env
+     * for tenant-specific external API credentials.
+     */
+    settings?: Record<string, unknown>;
+    /** @deprecated Alias of `settings` kept for older app handlers. */
+    install_settings?: Record<string, unknown>;
     /**
      * Platform capabilities from `tool.invoke` (`storage`, `customer`,
      * `marketing`, `channels`). Apps read workspace WhatsApp digits from
@@ -108,6 +124,12 @@ export interface ToolContext<TParameters = Record<string, unknown>> {
     authorizeCustomer<T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T>;
     /** @deprecated Use ctx.customer.lookup + ctx.customer.authorize */
     requireAuthentication<T>(resolver: (auth: AuthBuilder<T>) => Promise<AuthOutcome<T>>): Promise<T>;
+    /**
+     * Publish a durable Business Event after this tool succeeds.
+     * Does not run CRM automation. Delivery is: outbox → Qefro bus → worker.
+     * `createQuotation` is a capability; `quotation.created` is an event.
+     */
+    emit(event: import('./business_events.js').EmittedBusinessEvent): void;
 }
 
 export interface ToolRegistration {

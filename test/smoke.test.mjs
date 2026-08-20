@@ -20,7 +20,7 @@ function sign(secret, body, ts = Math.floor(Date.now() / 1000)) {
 describe('@qefro-ai/backend module split smoke', () => {
     it('exports version and brand constants', () => {
         assert.equal(SDK_NAME, '@qefro-ai/backend');
-        assert.equal(SDK_VERSION, '1.7.0');
+        assert.equal(SDK_VERSION, '1.7.1');
     });
 
     it('preserves named + default Qefro export', async () => {
@@ -60,7 +60,7 @@ describe('@qefro-ai/backend module split smoke', () => {
             'x-qefro-timestamp': pingSig.timestamp,
         });
         assert.equal(pong.type, 'pong');
-        assert.equal(pong.sdk_version, '1.7.0');
+        assert.equal(pong.sdk_version, '1.7.1');
 
         const capsBody = JSON.stringify({
             protocol_version: '1',

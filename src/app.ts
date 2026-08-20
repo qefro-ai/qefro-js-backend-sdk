@@ -23,6 +23,13 @@ import {
     type NamedHandlerRegistration,
 } from './events.js';
 import {
+    isBusinessEventType,
+    normalizeBusinessEvent,
+    normalizeEmittedEvent,
+    type BusinessEventDefinition,
+    type EmittedBusinessEvent,
+} from './business_events.js';
+import {
     FlowBuilder,
     normalizeFlowTrigger,
     type BusinessFlow,
@@ -59,7 +66,7 @@ import {
     type ToolHandler,
     type ToolRegistration,
 } from './tools.js';
-import { verifySignature } from './transport.js';
+import { signBody, verifySignature } from './transport.js';
 import {
     toMarketingCapability,
     validateMarketingDefinition,
@@ -72,6 +79,7 @@ import {
     type OrganizationCapabilities,
     type OrganizationDefinition,
 } from './organization.js';
+import { defaultOutboxDir, EventOutbox } from './event_outbox.js';
 
 const PENDING_TTL_MS = 15 * 60 * 1000;
 
@@ -81,12 +89,16 @@ export class Qefro {
     private readonly events = new Map<string, NamedHandlerRegistration>();
     private readonly webhooks = new Map<string, NamedHandlerRegistration>();
     private readonly schedules = new Map<string, NamedHandlerRegistration>();
+    private readonly businessEvents = new Map<string, BusinessEventDefinition>();
     private readonly pending = new Map<string, PendingInvocation>();
     private readonly authByConversation = new Map<string, StoredAuth>();
     private readonly protocolVersion: string;
     private readonly maxTimestampSkewSeconds: number;
     private readonly signingSecret: string;
     private readonly endpointPath: string;
+    private readonly outbox: EventOutbox;
+    private readonly eventIngestUrl?: string;
+    private flushInFlight: Promise<void> | null = null;
     private readonly middlewares: Middleware[] = [];
     private readonly beforeHooks: BeforeHook[] = [];
     private readonly afterHooks: AfterHook[] = [];
@@ -99,6 +111,8 @@ export class Qefro {
         this.protocolVersion = config.protocolVersion ?? '1';
         this.maxTimestampSkewSeconds = config.maxTimestampSkewSeconds ?? 300;
         this.endpointPath = config.endpointPath ?? '/qefro';
+        this.outbox = new EventOutbox(config.eventOutboxDir ?? defaultOutboxDir(config.signingSecret));
+        this.eventIngestUrl = config.eventIngestUrl?.trim() || undefined;
     }
 
     use(middleware: Middleware): this {
@@ -250,6 +264,23 @@ export class Qefro {
         return this;
     }
 
+    /**
+     * Declare a Business Event this connector may emit into the Qefro bus.
+     * Appears in CRM Automation as a trigger. Not a tool — do not register
+     * `createQuotation` here; register `quotation.created`.
+     *
+     * `version` is the producer payload schema (default 1). Bump it when
+     * fields such as `quotation.amount` change shape.
+     */
+    businessEvent(def: BusinessEventDefinition): this {
+        const normalized = normalizeBusinessEvent(def);
+        if (this.businessEvents.has(normalized.event_type)) {
+            throw new Error(`businessEvent "${normalized.event_type}" is already registered`);
+        }
+        this.businessEvents.set(normalized.event_type, normalized);
+        return this;
+    }
+
     private registerNamedHandler(
         map: Map<string, NamedHandlerRegistration>,
         kind: 'event' | 'webhook' | 'schedule',
@@ -316,7 +347,9 @@ export class Qefro {
             return { error: 'protocol_mismatch', expected: this.protocolVersion, received: protocolHeader };
         }
         const req = JSON.parse(body) as ProtocolRequest;
-        return this.handle(req, headers);
+        const response = await this.handle(req, headers);
+        this.scheduleFlush();
+        return response;
     }
 
     private listRegisteredFlows(): BusinessFlow[] {
@@ -336,6 +369,7 @@ export class Qefro {
             permissions: tool.definition.permissions,
             timeout: tool.definition.timeout,
             lookup: tool.definition.lookup,
+            chat: tool.definition.chat,
         }));
     }
 
@@ -384,6 +418,7 @@ export class Qefro {
                 events: this.listRegisteredEvents(),
                 webhooks: this.listRegisteredWebhooks(),
                 schedules: this.listRegisteredSchedules(),
+                business_events: [...this.businessEvents.values()],
                 ...(this.marketingRegistration
                     ? { marketing: toMarketingCapability(this.marketingRegistration) }
                     : {}),
@@ -431,6 +466,7 @@ export class Qefro {
                 req.person,
                 req.platform ?? pending.platform,
                 traceId,
+                req.settings ?? pending.settings,
             );
         }
 
@@ -445,6 +481,7 @@ export class Qefro {
             req.person,
             req.platform,
             traceId,
+            req.settings,
         );
     }
 
@@ -459,6 +496,7 @@ export class Qefro {
         personSnapshot?: PersonRecord | null,
         platform?: PlatformCapabilities,
         traceId?: string,
+        settings?: Record<string, unknown>,
     ): Promise<ProtocolResponse> {
         const registration = this.tools.get(toolName);
         if (!registration) {
@@ -533,6 +571,7 @@ export class Qefro {
             return this.consumeAuthOutcome(outcome, conversationId, state);
         };
 
+        const emitted: EmittedBusinessEvent[] = [];
         const ctx: ToolContext = {
             identity: identity ?? {},
             parameters,
@@ -540,6 +579,8 @@ export class Qefro {
             channel,
             authentication,
             logger,
+            settings,
+            install_settings: settings,
             platform,
             trace_id: traceId,
             customer,
@@ -551,6 +592,23 @@ export class Qefro {
             requireCustomer: resolveAuth,
             authorizeCustomer: resolveAuth,
             requireAuthentication: resolveAuth,
+            emit: (event) => {
+                const event_type = typeof event?.event_type === 'string' ? event.event_type.trim() : '';
+                if (!isBusinessEventType(event_type)) {
+                    throw new Error(
+                        `ctx.emit() requires a Business Event such as quotation.created, not a capability; got "${event?.event_type}"`,
+                    );
+                }
+                if (this.businessEvents.size > 0 && !this.businessEvents.has(event_type)) {
+                    throw new Error(
+                        `ctx.emit("${event_type}") is not declared via app.businessEvent()`,
+                    );
+                }
+                const durable = normalizeEmittedEvent(event, this.businessEvents.get(event_type));
+                this.outbox.put(durable);
+                emitted.push(durable);
+                this.scheduleFlush();
+            },
         };
 
         try {
@@ -568,11 +626,13 @@ export class Qefro {
             }
 
             const latest = this.getStoredAuth(conversationId);
+            const events = this.mergePendingEvents(emitted);
             return {
                 type: 'result',
                 output,
                 authentication_context: latest?.auth,
                 person_mutations: personMutations.length > 0 ? personMutations : undefined,
+                events: events.length > 0 ? events : undefined,
             };
         } catch (err) {
             if (err instanceof ChallengeSignal) {
@@ -585,6 +645,7 @@ export class Qefro {
                     identity,
                     channel,
                     platform,
+                    settings,
                     createdAt: Date.now(),
                 });
                 return {
@@ -632,6 +693,67 @@ export class Qefro {
         const now = Date.now();
         for (const [token, pending] of this.pending) {
             if (now - pending.createdAt > PENDING_TTL_MS) this.pending.delete(token);
+        }
+    }
+
+    private mergePendingEvents(session: EmittedBusinessEvent[]): EmittedBusinessEvent[] {
+        const byId = new Map<string, EmittedBusinessEvent>();
+        for (const event of this.outbox.pending()) {
+            if (event.event_id) byId.set(event.event_id, event);
+        }
+        for (const event of session) {
+            if (event.event_id) byId.set(event.event_id, event);
+        }
+        return [...byId.values()];
+    }
+
+    /**
+     * Deliver persisted outbox events to Qefro ingest if configured.
+     * Never waits for CRM automation — ingest only enqueues on the bus.
+     */
+    private scheduleFlush(): void {
+        if (!this.eventIngestUrl || this.flushInFlight) return;
+        this.flushInFlight = this.flushOutbox().finally(() => {
+            this.flushInFlight = null;
+        });
+    }
+
+    private async flushOutbox(): Promise<void> {
+        const url = this.eventIngestUrl;
+        if (!url) return;
+        for (const event of this.outbox.pending()) {
+            const delivered = await this.postIngest(url, event);
+            if (delivered && event.event_id) this.outbox.ack(event.event_id);
+        }
+    }
+
+    private async postIngest(url: string, event: EmittedBusinessEvent): Promise<boolean> {
+        const body = JSON.stringify({
+            name: event.event_type,
+            event_type: event.event_type,
+            event_id: event.event_id,
+            payload: {
+                customer: event.customer ?? {},
+                data: event.data ?? {},
+                event_version: event.version ?? 1,
+                external_event_id: event.event_id,
+                ...(event.timestamp ? { timestamp: event.timestamp } : {}),
+            },
+        });
+        const { signature, timestamp } = signBody(this.signingSecret, body);
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'content-type': 'application/json',
+                    'x-qefro-signature': signature,
+                    'x-qefro-timestamp': timestamp,
+                },
+                body,
+            });
+            return res.ok || res.status === 409;
+        } catch {
+            return false;
         }
     }
 
@@ -723,6 +845,7 @@ export class Qefro {
 
             const protocolReq = JSON.parse(body) as ProtocolRequest;
             const protocolResp = await this.handle(protocolReq, headers);
+            this.scheduleFlush();
             res.statusCode = 200;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify(protocolResp));

@@ -57,6 +57,12 @@ export type {
     EventHandler,
     EventContext,
 } from './events.js';
+export type {
+    BusinessEventDefinition,
+    BusinessEventField,
+    EmittedBusinessEvent,
+} from './business_events.js';
+export { isBusinessEventType, stableEventId, normalizeEmittedEvent } from './business_events.js';
 
 export type {
     ChallengePayload,
